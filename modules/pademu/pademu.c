@@ -170,6 +170,11 @@ void pademu_connect(struct pad_funcs *pf)
     int i;
     // DPRINTF("%s\n", __FUNCTION__);
     for (i = 0; i < MAX_PORTS; i++) {
+        if (padf[i] == pf) {
+            return; /* Already connected to a port */
+        }
+    }
+    for (i = 0; i < MAX_PORTS; i++) {
         if (pad[i].enabled && padf[i] == NULL) {
             DPRINTF("connect pad %d\n", i);
             padf[i] = pf;
@@ -302,12 +307,15 @@ void pademu_hookSio2man(sio2_transfer_data_t *td, Sio2McProc sio2proc)
                         sio2proc = pademu;
                     }
                 } else {
-                    if (pad[0].enabled && pad[1].enabled) { // emulating 2 pads
+                    int emu0 = pad[0].enabled && (padf[0] != NULL);
+                    int emu1 = pad[1].enabled && (padf[1] != NULL);
+
+                    if (emu0 && emu1) { // emulating 2 pads
                         sio2proc = pademu;
-                    } else if (pad[0].enabled || pad[1].enabled) { // only one
-                        if (pad[0].enabled) {
+                    } else if (emu0 || emu1) { // only one
+                        if (emu0) {
                             ctrl = 0;
-                        } else if (pad[1].enabled) {
+                        } else if (emu1) {
                             for (ctrl = 5; ctrl < td->in_size - 3; ctrl++) {
                                 if (td->in[ctrl] == 0x01 && (td->in[ctrl + 1] & 0xF0) == 0x40 && td->in[ctrl + 2] == 0x00) {
                                     if (ctrl != 5 && ctrl != 9 && ctrl != 21)
@@ -332,7 +340,7 @@ void pademu_hookSio2man(sio2_transfer_data_t *td, Sio2McProc sio2proc)
                         sio2proc = pademu;
                     }
                 } else {
-                    if (pad[port1].enabled) { // emulating this port
+                    if (pad[port1].enabled && padf[port1] != NULL) { // emulating this port
                         sio2proc = pademu;
                     }
                 }
@@ -365,6 +373,11 @@ static void pademu_setup(u8 ports, u8 vib)
         pad[i].lrum = 4; // 2;
         pad[i].rrum = 3; // 2;
     }
+
+#ifdef IIDX
+    /* Ensure Port 1 (pad[0]) is ALWAYS enabled for IIDX controller */
+    pad[0].enabled = 1;
+#endif
 }
 
 static u8 pademu_data[6][6] =
@@ -373,8 +386,9 @@ static u8 pademu_data[6][6] =
         {0x03, 0x02, 0x00, 0x02, 0x01, 0x00},  // 0x45
         {0x00, 0x00, 0x01, 0x02, 0x00, 0x0A},  // 0x46
         {0x00, 0x00, 0x01, 0x01, 0x01, 0x14},  // 0x46
-        {0x00, 0x00, 0x02, 0x00, 0x01, 0x00},  // 0x47
-        {0x00, 0x01, 0xFF, 0xFF, 0xFF, 0xFF}}; // 0x4D
+        {0x00, 0x00, 0x01, 0x02, 0x01, 0x00},  // 0x47
+        {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF},  // 0x4D
+};
 
 static void pademu(sio2_transfer_data_t *td)
 {
@@ -417,15 +431,18 @@ static void pademu(sio2_transfer_data_t *td)
                 cmd_size = td->in_size - cmd_size;
             }
         } else {
-            if (pad[0].enabled) {
+            int emu0 = pad[0].enabled && (padf[0] != NULL);
+            int emu1 = pad[1].enabled && (padf[1] != NULL);
+
+            if (emu0) {
                 in = td->in;
                 out = td->out;
                 port = 0;
 
-                if (pad[1].enabled) { // emulating ports 0 & 1
+                if (emu1) { // emulating ports 0 & 1
                     pademu_cmd(1, (u8 *)&td->in[cmd_size], (u8 *)&td->out[cmd_size], td->in_size - cmd_size);
                 }
-            } else { // emulating only port 1
+            } else if (emu1) { // emulating only port 1
                 in = (u8 *)&td->in[cmd_size];
                 out = (u8 *)&td->out[cmd_size];
                 port = 1;

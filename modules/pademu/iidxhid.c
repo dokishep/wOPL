@@ -90,52 +90,63 @@ static void iidx_readReport(u8 *buf, iidx_device *pad)
     u32 hid_buttons = 0;
     u8 up = 0, down = 0;
 
-    /*
-     * Non-blocking dynamic layout auto-detection based on turntable resting center value (~32767).
-     * Once detected, layout_detected is locked to 1.
-     */
-    if (!pad->layout_detected) {
-        u16 c0 = (u16)(buf[0] | (buf[1] << 8));
-        u16 c1 = (u16)(buf[1] | (buf[2] << 8));
-        u16 c4 = (u16)(buf[4] | (buf[5] << 8));
-        u16 c5 = (u16)(buf[5] | (buf[6] << 8));
+    if (pad->packet_size < 16) {
+        /* Standard compact USB HID Gamepad (typically 6-10 bytes) */
+        int xo = (buf[0] > 0 && buf[0] < 8) ? 1 : 0;
+        int bo = (buf[0] > 0 && buf[0] < 8) ? 5 : 4;
 
-        if (c0 >= 24000 && c0 <= 42000) {
-            pad->x_byte_offset = 0;
-            pad->btn_byte_offset = 12;
-            pad->layout_detected = 1;
-            DPRINTF("Auto-detected layout 1: X at offset 0, Buttons at offset 12\n");
-        } else if (c1 >= 24000 && c1 <= 42000) {
-            pad->x_byte_offset = 1;
-            pad->btn_byte_offset = 13;
-            pad->layout_detected = 1;
-            DPRINTF("Auto-detected layout 2: X at offset 1, Buttons at offset 13\n");
-        } else if (c4 >= 24000 && c4 <= 42000) {
-            pad->x_byte_offset = 4;
-            pad->btn_byte_offset = 0;
-            pad->layout_detected = 1;
-            DPRINTF("Auto-detected layout 3: X at offset 4, Buttons at offset 0\n");
-        } else if (c5 >= 24000 && c5 <= 42000) {
-            pad->x_byte_offset = 5;
-            pad->btn_byte_offset = 1;
-            pad->layout_detected = 1;
-            DPRINTF("Auto-detected layout 4: X at offset 5, Buttons at offset 1\n");
-        }
-    }
-
-    if (pad->layout_detected) {
-        int xo = pad->x_byte_offset;
-        int bo = pad->btn_byte_offset;
-        x_raw = (u16)(buf[xo] | (buf[xo + 1] << 8));
-        hid_buttons = (u32)(buf[bo] | (buf[bo + 1] << 8) | (buf[bo + 2] << 16) | (buf[bo + 3] << 24));
+        /* If 8-bit axis centered around 128 */
+        x_raw = (u16)buf[xo] * 257;
+        hid_buttons = (u32)(buf[bo] | (buf[bo + 1] << 8));
     } else {
-        /* Fallback if controller booted while turntable was actively held away from center */
-        if (buf[0] != 0 && buf[0] < 8) {
-            x_raw = (u16)(buf[1] | (buf[2] << 8));
-            hid_buttons = (u32)(buf[13] | (buf[14] << 8) | (buf[15] << 16) | (buf[16] << 24));
+        /*
+         * Dedicated arcade controller layout (16-64 bytes)
+         * Non-blocking dynamic layout auto-detection based on turntable resting center value (~32767).
+         * Once detected, layout_detected is locked to 1.
+         */
+        if (!pad->layout_detected) {
+            u16 c0 = (u16)(buf[0] | (buf[1] << 8));
+            u16 c1 = (u16)(buf[1] | (buf[2] << 8));
+            u16 c4 = (u16)(buf[4] | (buf[5] << 8));
+            u16 c5 = (u16)(buf[5] | (buf[6] << 8));
+
+            if (c0 >= 24000 && c0 <= 42000) {
+                pad->x_byte_offset = 0;
+                pad->btn_byte_offset = 12;
+                pad->layout_detected = 1;
+                DPRINTF("Auto-detected layout 1: X at offset 0, Buttons at offset 12\n");
+            } else if (c1 >= 24000 && c1 <= 42000) {
+                pad->x_byte_offset = 1;
+                pad->btn_byte_offset = 13;
+                pad->layout_detected = 1;
+                DPRINTF("Auto-detected layout 2: X at offset 1, Buttons at offset 13\n");
+            } else if (c4 >= 24000 && c4 <= 42000) {
+                pad->x_byte_offset = 4;
+                pad->btn_byte_offset = 0;
+                pad->layout_detected = 1;
+                DPRINTF("Auto-detected layout 3: X at offset 4, Buttons at offset 0\n");
+            } else if (c5 >= 24000 && c5 <= 42000) {
+                pad->x_byte_offset = 5;
+                pad->btn_byte_offset = 1;
+                pad->layout_detected = 1;
+                DPRINTF("Auto-detected layout 4: X at offset 5, Buttons at offset 1\n");
+            }
+        }
+
+        if (pad->layout_detected) {
+            int xo = pad->x_byte_offset;
+            int bo = pad->btn_byte_offset;
+            x_raw = (u16)(buf[xo] | (buf[xo + 1] << 8));
+            hid_buttons = (u32)(buf[bo] | (buf[bo + 1] << 8) | (buf[bo + 2] << 16) | (buf[bo + 3] << 24));
         } else {
-            x_raw = (u16)(buf[0] | (buf[1] << 8));
-            hid_buttons = (u32)(buf[12] | (buf[13] << 8) | (buf[14] << 16) | (buf[15] << 24));
+            /* Fallback if controller booted while turntable was actively held away from center */
+            if (buf[0] != 0 && buf[0] < 8) {
+                x_raw = (u16)(buf[1] | (buf[2] << 8));
+                hid_buttons = (u32)(buf[13] | (buf[14] << 8) | (buf[15] << 16) | (buf[16] << 24));
+            } else {
+                x_raw = (u16)(buf[0] | (buf[1] << 8));
+                hid_buttons = (u32)(buf[12] | (buf[13] << 8) | (buf[14] << 16) | (buf[15] << 24));
+            }
         }
     }
 
@@ -154,7 +165,7 @@ static void iidx_readReport(u8 *buf, iidx_device *pad)
                 (hid_buttons >> 5) & 1,
                 (hid_buttons >> 6) & 1,
                 (hid_buttons >> 7) & 1,
-                (hid_buttons >> 9) & 1);
+                ((hid_buttons >> 8) | (hid_buttons >> 9)) & 1);
         pad->last_raw_buttons = hid_buttons;
         pad->last_debug_up = up;
         pad->last_debug_down = down;
@@ -174,7 +185,7 @@ static void iidx_readReport(u8 *buf, iidx_device *pad)
      * IIDX key 6            | Button 6  | R2
      * IIDX key 7            | Button 7  | LEFT
      * SELECT                | Button 8  | SELECT
-     * START                 | Button 10 | START
+     * START                 | Button 9/10| START
      * TT one direction      | X low     | UP
      * TT opposite direction | X high    | DOWN
      */
@@ -202,7 +213,8 @@ static void iidx_readReport(u8 *buf, iidx_device *pad)
     if (hid_buttons & (1 << 7))
         buttons_state &= ~(1 << DS2BtnBit_Select);
 
-    if (hid_buttons & (1 << 9))
+    /* Start: support both button 9 (bit 8) and button 10 (bit 9) */
+    if ((hid_buttons & (1 << 8)) || (hid_buttons & (1 << 9)))
         buttons_state &= ~(1 << DS2BtnBit_Start);
 
     if (up)
@@ -249,7 +261,6 @@ static void iidx_readReport(u8 *buf, iidx_device *pad)
 static int iidxhid_probe(int devId)
 {
     UsbDeviceDescriptor *device = NULL;
-    UsbConfigDescriptor *config = NULL;
 
     DPRINTF("probe: devId=%i\n", devId);
 
@@ -258,60 +269,49 @@ static int iidxhid_probe(int devId)
         return 0;
     }
 
-    /* Exclude Sony DualShock controllers (handled by ds34usb / ds34bt) */
-    if (device->idVendor == DS34_VID ||
-        (device->idVendor == SONY_VID &&
-         (device->idProduct == DS3_PID || device->idProduct == DS4_PID ||
-          device->idProduct == DS4_PID_SLIM || device->idProduct == DS5_PID ||
-          device->idProduct == GUITAR_HERO_PS3_PID || device->idProduct == ROCK_BAND_PS3_PID))) {
+    /* Do not claim USB Mass Storage devices (handled by usbmass_bd) */
+    if (device->bDeviceClass == 0x08) {
         return 0;
     }
 
-    config = (UsbConfigDescriptor *)sceUsbdScanStaticDescriptor(devId, device, USB_DT_CONFIG);
-    if (config == NULL || config->wTotalLength < sizeof(UsbConfigDescriptor)) {
+    /* Do not claim USB Hubs */
+    if (device->bDeviceClass == 0x09) {
         return 0;
     }
 
-    /*
-     * Walk configuration descriptor buffer directly.
-     * In FreeUsbd, sceUsbdScanStaticDescriptor does not scan USB_DT_INTERFACE,
-     * so scanning the raw contiguous descriptor buffer is the standard PS2SDK pattern.
-     */
-    const u8 *p = (const u8 *)config;
-    const u8 *end = p + config->wTotalLength;
-    int is_hid = 0;
+    /* Check if configuration descriptor has a Mass Storage interface (0x08) */
+    UsbConfigDescriptor *config = (UsbConfigDescriptor *)sceUsbdScanStaticDescriptor(devId, device, USB_DT_CONFIG);
+    if (!config)
+        config = (UsbConfigDescriptor *)sceUsbdScanStaticDescriptor(devId, NULL, USB_DT_CONFIG);
 
-    while (p + 2 <= end) {
-        u8 len = p[0];
-        u8 type = p[1];
-        if (len < 2 || p + len > end)
-            break;
-
-        if (type == USB_DT_INTERFACE && len >= sizeof(UsbInterfaceDescriptor)) {
-            UsbInterfaceDescriptor *intf = (UsbInterfaceDescriptor *)p;
-            if (intf->bInterfaceClass == USB_CLASS_HID) {
-                /* Exclude boot keyboard (subclass 1, proto 1) and boot mouse (subclass 1, proto 2) */
-                if (!(intf->bInterfaceSubClass == 1 &&
-                     (intf->bInterfaceProtocol == 1 || intf->bInterfaceProtocol == 2))) {
-                    is_hid = 1;
-                } else {
-                    is_hid = 0;
+    if (config != NULL && config->wTotalLength >= sizeof(UsbConfigDescriptor)) {
+        const u8 *p = (const u8 *)config;
+        const u8 *end = p + config->wTotalLength;
+        while (p + 2 <= end) {
+            u8 len = p[0];
+            u8 type = p[1];
+            if (len < 2 || p + len > end)
+                break;
+            if (type == USB_DT_INTERFACE && len >= sizeof(UsbInterfaceDescriptor)) {
+                UsbInterfaceDescriptor *intf = (UsbInterfaceDescriptor *)p;
+                if (intf->bInterfaceClass == 0x08) {
+                    return 0; /* Mass storage interface - do not claim */
                 }
-            } else {
-                is_hid = 0;
             }
-        } else if (type == USB_DT_ENDPOINT && is_hid && len >= sizeof(UsbEndpointDescriptor)) {
-            UsbEndpointDescriptor *ep = (UsbEndpointDescriptor *)p;
-            if (ep->bmAttributes == USB_ENDPOINT_XFER_INT &&
-                (ep->bEndpointAddress & USB_ENDPOINT_DIR_MASK) == USB_DIR_IN) {
-                return 1;
-            }
+            p += len;
         }
-
-        p += len;
     }
 
-    return 0;
+    /* Only exclude the specific DualShock/Guitar controllers handled by ds34usb */
+    if ((device->idVendor == SONY_VID || device->idVendor == DS34_VID) &&
+        (device->idProduct == DS3_PID || device->idProduct == DS4_PID ||
+         device->idProduct == DS4_PID_SLIM || device->idProduct == DS5_PID ||
+         device->idProduct == GUITAR_HERO_PS3_PID || device->idProduct == ROCK_BAND_PS3_PID)) {
+        return 0;
+    }
+
+    /* Claim all other USB devices (arcade controllers, generic HID, Konami, DIY, etc.) */
+    return 1;
 }
 
 static int iidxhid_connect(int devId)
@@ -319,6 +319,7 @@ static int iidxhid_connect(int devId)
     int pad;
     UsbDeviceDescriptor *device;
     UsbConfigDescriptor *config;
+    UsbEndpointDescriptor *endpoint;
 
     DPRINTF("connect: devId=%i\n", devId);
 
@@ -343,54 +344,67 @@ static int iidxhid_connect(int devId)
         iidx_release(pad);
         return 1;
     }
+
     config = (UsbConfigDescriptor *)sceUsbdScanStaticDescriptor(devId, device, USB_DT_CONFIG);
-    if (config == NULL || config->wTotalLength < sizeof(UsbConfigDescriptor)) {
-        iidx_release(pad);
-        return 1;
+    if (config == NULL) {
+        config = (UsbConfigDescriptor *)sceUsbdScanStaticDescriptor(devId, NULL, USB_DT_CONFIG);
     }
 
-    /* Walk config buffer to find HID interface and Interrupt IN endpoint */
-    const u8 *p = (const u8 *)config;
-    const u8 *end = p + config->wTotalLength;
-    int is_hid = 0;
-    int cur_intf = 0;
-
-    while (p + 2 <= end && iidx_pad[pad].interruptEndp < 0) {
-        u8 len = p[0];
-        u8 type = p[1];
-        if (len < 2 || p + len > end)
-            break;
-
-        if (type == USB_DT_INTERFACE && len >= sizeof(UsbInterfaceDescriptor)) {
-            UsbInterfaceDescriptor *intf = (UsbInterfaceDescriptor *)p;
-            if (intf->bInterfaceClass == USB_CLASS_HID) {
-                if (!(intf->bInterfaceSubClass == 1 &&
-                     (intf->bInterfaceProtocol == 1 || intf->bInterfaceProtocol == 2))) {
-                    is_hid = 1;
-                    cur_intf = intf->bInterfaceNumber;
-                } else {
-                    is_hid = 0;
-                }
-            } else {
-                is_hid = 0;
-            }
-        } else if (type == USB_DT_ENDPOINT && is_hid && len >= sizeof(UsbEndpointDescriptor)) {
-            UsbEndpointDescriptor *ep = (UsbEndpointDescriptor *)p;
-            if (ep->bmAttributes == USB_ENDPOINT_XFER_INT &&
-                (ep->bEndpointAddress & USB_ENDPOINT_DIR_MASK) == USB_DIR_IN) {
-                u16 pkt = (ep->wMaxPacketSizeHB << 8) | ep->wMaxPacketSizeLB;
+    /* Method 1: Scan endpoints using FreeUsbd's static descriptor scanner (as in ds34usb.c) */
+    endpoint = (UsbEndpointDescriptor *)sceUsbdScanStaticDescriptor(devId, NULL, USB_DT_ENDPOINT);
+    if (endpoint != NULL) {
+        int epLimit = 32;
+        while (endpoint != NULL && epLimit-- > 0) {
+            if (endpoint->bLength < sizeof(UsbEndpointDescriptor))
+                break;
+            if ((endpoint->bmAttributes & 0x03) == USB_ENDPOINT_XFER_INT &&
+                (endpoint->bEndpointAddress & USB_ENDPOINT_DIR_MASK) == USB_DIR_IN) {
+                u16 pkt = (endpoint->wMaxPacketSizeHB << 8) | endpoint->wMaxPacketSizeLB;
                 if (pkt == 0 || pkt > 64)
                     pkt = 64;
                 iidx_pad[pad].packet_size = pkt;
-                iidx_pad[pad].interfaceNumber = cur_intf;
-                iidx_pad[pad].interruptEndp = sceUsbdOpenPipe(devId, ep);
-                DPRINTF("Registered interrupt IN endpoint id=%d addr=%02X pktSize=%u\n",
-                        iidx_pad[pad].interruptEndp, ep->bEndpointAddress, pkt);
+                iidx_pad[pad].interruptEndp = sceUsbdOpenPipe(devId, endpoint);
+                DPRINTF("Method 1: Registered interrupt IN endpoint id=%d addr=%02X pktSize=%u\n",
+                        iidx_pad[pad].interruptEndp, endpoint->bEndpointAddress, pkt);
                 break;
             }
+            endpoint = (UsbEndpointDescriptor *)((char *)endpoint + endpoint->bLength);
         }
+    }
 
-        p += len;
+    /* Method 2: If Method 1 did not find it, scan configuration descriptor buffer */
+    if (iidx_pad[pad].interruptEndp < 0 && config != NULL && config->wTotalLength >= sizeof(UsbConfigDescriptor)) {
+        const u8 *p = (const u8 *)config;
+        const u8 *end = p + config->wTotalLength;
+        int cur_intf = 0;
+
+        while (p + 2 <= end) {
+            u8 len = p[0];
+            u8 type = p[1];
+            if (len < 2 || p + len > end)
+                break;
+
+            if (type == USB_DT_INTERFACE && len >= sizeof(UsbInterfaceDescriptor)) {
+                UsbInterfaceDescriptor *intf = (UsbInterfaceDescriptor *)p;
+                cur_intf = intf->bInterfaceNumber;
+            } else if (type == USB_DT_ENDPOINT && len >= sizeof(UsbEndpointDescriptor)) {
+                UsbEndpointDescriptor *ep = (UsbEndpointDescriptor *)p;
+                if ((ep->bmAttributes & 0x03) == USB_ENDPOINT_XFER_INT &&
+                    (ep->bEndpointAddress & USB_ENDPOINT_DIR_MASK) == USB_DIR_IN) {
+                    u16 pkt = (ep->wMaxPacketSizeHB << 8) | ep->wMaxPacketSizeLB;
+                    if (pkt == 0 || pkt > 64)
+                        pkt = 64;
+                    iidx_pad[pad].packet_size = pkt;
+                    iidx_pad[pad].interfaceNumber = cur_intf;
+                    iidx_pad[pad].interruptEndp = sceUsbdOpenPipe(devId, ep);
+                    DPRINTF("Method 2: Registered interrupt IN endpoint id=%d addr=%02X pktSize=%u\n",
+                            iidx_pad[pad].interruptEndp, ep->bEndpointAddress, pkt);
+                    break;
+                }
+            }
+
+            p += len;
+        }
     }
 
     if (iidx_pad[pad].interruptEndp < 0) {
@@ -411,7 +425,11 @@ static int iidxhid_connect(int devId)
     /* Connect pad to PADEMU immediately */
     pademu_connect(&padf[pad]);
 
-    sceUsbdSetConfiguration(iidx_pad[pad].controlEndp, config->bConfigurationValue, iidx_config_set, (void *)(long)pad);
+    if (config != NULL) {
+        sceUsbdSetConfiguration(iidx_pad[pad].controlEndp, config->bConfigurationValue, iidx_config_set, (void *)(long)pad);
+    } else {
+        sceUsbdSetConfiguration(iidx_pad[pad].controlEndp, 1, iidx_config_set, (void *)(long)pad);
+    }
     SignalSema(iidx_pad[pad].sema);
 
     return 0;
@@ -459,7 +477,6 @@ static int iidxhid_disconnect(int devId)
 
     if (pad < IIDX_MAX_PADS) {
         iidx_release(pad);
-        pademu_disconnect(&padf[pad]);
     }
 
     return 0;
@@ -484,6 +501,8 @@ static void iidx_release(int pad)
     iidx_pad[pad].tt_down = 0;
 
     SignalSema(iidx_pad[pad].sema);
+
+    pademu_disconnect(&padf[pad]);
 }
 
 static void usb_data_cb(int resultCode, int bytes, void *arg)
@@ -533,6 +552,8 @@ static int iidxhid_get_data(struct pad_funcs *pf, u8 *dst, int size, int port)
         }
     }
 
+    if (size > 18)
+        size = 18;
     memcpy(dst, pad->data, size);
     return pad->analog_btn & 1;
 }
