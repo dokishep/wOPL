@@ -57,6 +57,8 @@ typedef struct _iidx_device
     u8 layout_detected;
     u8 x_byte_offset;
     u8 btn_byte_offset;
+    u16 packet_size;
+    volatile u8 transfer_active;
 
     /* Debug tracking (for rate-limiting log output to state changes) */
     u32 last_raw_buttons;

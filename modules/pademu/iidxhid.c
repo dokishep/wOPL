@@ -328,9 +328,13 @@ static int iidxhid_connect(int devId)
     do {
         if (endpoint->bmAttributes == USB_ENDPOINT_XFER_INT) {
             if ((endpoint->bEndpointAddress & USB_ENDPOINT_DIR_MASK) == USB_DIR_IN && iidx_pad[pad].interruptEndp < 0) {
+                u16 pkt = (endpoint->wMaxPacketSizeHB << 8) | endpoint->wMaxPacketSizeLB;
+                if (pkt == 0 || pkt > 64)
+                    pkt = 64;
+                iidx_pad[pad].packet_size = pkt;
                 iidx_pad[pad].interruptEndp = sceUsbdOpenPipe(devId, endpoint);
-                DPRINTF("Registered interrupt IN endpoint id=%d addr=%02X\n",
-                        iidx_pad[pad].interruptEndp, endpoint->bEndpointAddress);
+                DPRINTF("Registered interrupt IN endpoint id=%d addr=%02X pktSize=%u\n",
+                        iidx_pad[pad].interruptEndp, endpoint->bEndpointAddress, pkt);
             }
         }
         endpoint = (UsbEndpointDescriptor *)((char *)endpoint + endpoint->bLength);
@@ -370,12 +374,18 @@ static void iidx_config_set(int result, int count, void *arg)
     pademu_connect(&padf[pad]);
 
     /* Start asynchronous interrupt polling loop */
-    if (iidx_pad[pad].interruptEndp >= 0) {
-        sceUsbdInterruptTransfer(iidx_pad[pad].interruptEndp,
-                                 iidx_pad[pad].usb_buf,
-                                 sizeof(iidx_pad[pad].usb_buf),
-                                 usb_data_cb,
-                                 (void *)(long)pad);
+    if (iidx_pad[pad].interruptEndp >= 0 && !iidx_pad[pad].transfer_active) {
+        int ret;
+        iidx_pad[pad].transfer_active = 1;
+        ret = sceUsbdInterruptTransfer(iidx_pad[pad].interruptEndp,
+                                       iidx_pad[pad].usb_buf,
+                                       iidx_pad[pad].packet_size ? iidx_pad[pad].packet_size : 64,
+                                       usb_data_cb,
+                                       (void *)(long)pad);
+        if (ret != USB_RC_OK) {
+            iidx_pad[pad].transfer_active = 0;
+            DPRINTF("Initial interrupt transfer error: %d\n", ret);
+        }
     }
 }
 
@@ -403,6 +413,7 @@ static void iidx_release(int pad)
     PollSema(iidx_pad[pad].sema);
 
     iidx_pad[pad].status = IIDXHID_STATE_DISCONNECTED;
+    iidx_pad[pad].transfer_active = 0;
 
     if (iidx_pad[pad].interruptEndp >= 0) {
         sceUsbdClosePipe(iidx_pad[pad].interruptEndp);
@@ -422,33 +433,48 @@ static void usb_data_cb(int resultCode, int bytes, void *arg)
 {
     int pad = (int)(long)arg;
 
+    iidx_pad[pad].transfer_active = 0;
+
     if (resultCode == USB_RC_OK) {
         if (bytes > 0) {
             iidx_readReport(iidx_pad[pad].usb_buf, &iidx_pad[pad]);
         }
         /* Re-submit next interrupt transfer asynchronously if still connected */
         if ((iidx_pad[pad].status & IIDXHID_STATE_RUNNING) && iidx_pad[pad].interruptEndp >= 0) {
-            sceUsbdInterruptTransfer(iidx_pad[pad].interruptEndp,
-                                     iidx_pad[pad].usb_buf,
-                                     sizeof(iidx_pad[pad].usb_buf),
-                                     usb_data_cb,
-                                     (void *)(long)pad);
+            int ret;
+            iidx_pad[pad].transfer_active = 1;
+            ret = sceUsbdInterruptTransfer(iidx_pad[pad].interruptEndp,
+                                           iidx_pad[pad].usb_buf,
+                                           iidx_pad[pad].packet_size ? iidx_pad[pad].packet_size : 64,
+                                           usb_data_cb,
+                                           (void *)(long)pad);
+            if (ret != USB_RC_OK) {
+                iidx_pad[pad].transfer_active = 0;
+            }
         }
-    } else if (resultCode != USB_RC_ABORTED) {
-        /* On transient error, re-queue if still running */
-        if ((iidx_pad[pad].status & IIDXHID_STATE_RUNNING) && iidx_pad[pad].interruptEndp >= 0) {
-            sceUsbdInterruptTransfer(iidx_pad[pad].interruptEndp,
-                                     iidx_pad[pad].usb_buf,
-                                     sizeof(iidx_pad[pad].usb_buf),
-                                     usb_data_cb,
-                                     (void *)(long)pad);
-        }
+    } else {
+        /* DO NOT RE-QUEUE ON ERROR: Prevents infinite recursion / lockups on USBD thread */
+        DPRINTF("usb_data_cb error: %d\n", resultCode);
     }
 }
 
 static int iidxhid_get_data(struct pad_funcs *pf, u8 *dst, int size, int port)
 {
     iidx_device *pad = pf->priv;
+
+    /* If no transfer active and device is connected, gently kick off a transfer */
+    if (!pad->transfer_active && (pad->status & IIDXHID_STATE_RUNNING) && pad->interruptEndp >= 0) {
+        int ret;
+        pad->transfer_active = 1;
+        ret = sceUsbdInterruptTransfer(pad->interruptEndp,
+                                       pad->usb_buf,
+                                       pad->packet_size ? pad->packet_size : 64,
+                                       usb_data_cb,
+                                       (void *)(long)pad->pad_idx);
+        if (ret != USB_RC_OK) {
+            pad->transfer_active = 0;
+        }
+    }
 
     memcpy(dst, pad->data, size);
     return pad->analog_btn & 1;
@@ -511,6 +537,8 @@ int iidxhid_init(u8 pad_enable, u8 pad_options)
         iidx_pad[pad].layout_detected = 0;
         iidx_pad[pad].x_byte_offset = 0;
         iidx_pad[pad].btn_byte_offset = 12;
+        iidx_pad[pad].packet_size = 64;
+        iidx_pad[pad].transfer_active = 0;
         iidx_pad[pad].tt_up = 0;
         iidx_pad[pad].tt_down = 0;
         iidx_pad[pad].last_x = 0x7FFF;
