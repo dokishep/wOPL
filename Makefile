@@ -355,7 +355,7 @@ clean:	download_lwNBD
 	echo " -ds34bt"
 	$(MAKE) -C modules/ds34bt clean
 	echo " -pademu"
-	$(MAKE) -C modules/pademu USE_BT=1 USE_USB=1 VMC=1 clean
+	$(MAKE) -C modules/pademu USE_BT=1 USE_USB=1 USE_IIDX=1 VMC=1 clean
 	echo "-pc tools"
 	$(MAKE) -C pc clean
 
@@ -591,7 +591,7 @@ $(EE_ASM_DIR)ds34usb.c: modules/ds34usb/iop/ds34usb.irx | $(EE_ASM_DIR)
 	$(BIN2C) $< $@ $(*F)_irx
 
 modules/pademu/pademu.irx: modules/pademu
-	$(MAKE) -C $< USE_BT=1 USE_USB=1 VMC=1 all
+	$(MAKE) -C $< USE_BT=1 USE_USB=1 USE_IIDX=1 VMC=1 all
 
 $(EE_ASM_DIR)pademu.c: modules/pademu/pademu.irx
 	$(BIN2C) $< $@ $(*F)_irx

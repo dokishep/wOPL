@@ -12,6 +12,12 @@ IOP_CFLAGS += -DBT
 IOP_OBJS += ds34bt.o
 endif
 
+USE_IIDX ?= 1
+ifeq ($(USE_IIDX),1)
+IOP_CFLAGS += -DIIDX
+IOP_OBJS += iidxhid.o
+endif
+
 ifeq ($(VMC),1)
 IOP_CFLAGS += -DVMC
 endif

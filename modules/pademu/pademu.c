@@ -24,6 +24,12 @@ static struct pad_funcs *padf[MAX_PORTS];
 
 #endif
 
+#ifdef IIDX
+
+#include "iidxhid.h"
+
+#endif
+
 #define MODNAME "pademu"
 IRX_ID(MODNAME, 1, 1);
 
@@ -147,6 +153,10 @@ int _start(int argc, char *argv[])
     ds34usb_reset();
     ds34usb_init(pad_enable, pad_options);
 #endif
+#ifdef IIDX
+    iidxhid_reset();
+    iidxhid_init(pad_enable, pad_options);
+#endif
     return MODULE_RESIDENT_END;
 }
 
@@ -155,7 +165,7 @@ void pademu_connect(struct pad_funcs *pf)
     int i;
     // DPRINTF("%s\n", __FUNCTION__);
     for (i = 0; i < MAX_PORTS; i++) {
-        if (padf[i] == NULL) {
+        if (pad[i].enabled && padf[i] == NULL) {
             DPRINTF("connect pad %d\n", i);
             padf[i] = pf;
             // pad[i].enabled = 1;
@@ -191,6 +201,9 @@ void _exit(int mode)
 #endif
 #ifdef USB
     ds34usb_reset();
+#endif
+#ifdef IIDX
+    iidxhid_reset();
 #endif
 }
 

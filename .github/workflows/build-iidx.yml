@@ -1,0 +1,83 @@
+name: Build wOPL with IIDX HID Support
+
+on:
+  push:
+    branches: [ "**" ]
+    tags: [ "**" ]
+  pull_request:
+    branches: [ "**" ]
+  workflow_dispatch:
+    inputs:
+      debug:
+        description: 'Build debug ELF'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Compile wOPL with IIDX HID
+    runs-on: ubuntu-latest
+    container: ghcr.io/ps2homebrew/ps2homebrew:main
+
+    steps:
+      - name: Install dependencies
+        run: |
+          apk update
+          apk add --no-cache \
+            make \
+            git \
+            python3 \
+            gcc \
+            g++ \
+            libtool \
+            automake \
+            bison \
+            flex \
+            texinfo \
+            gawk \
+            wget \
+            curl \
+            zip
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Safe directory
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Build wOPL Release (PADEMU + IIDX HID)
+        run: |
+          echo "Building wOPL with PADEMU=1 and USE_IIDX=1..."
+          make --trace clean release PADEMU=1 USE_IIDX=1
+
+      - name: Upload Release ELF Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wOPL-IIDX-Release
+          path: |
+            WOPNPS2LD-*.ELF
+            OPNPS2LD.ELF
+            wopl.elf
+          if-no-files-found: warn
+
+      - name: Build Debug wOPL (if requested)
+        if: ${{ inputs.debug == true }}
+        run: |
+          make --trace clean PADEMU=1 USE_IIDX=1 DEBUG=1
+          mv wopl.elf wopl-iidx-debug.elf || true
+
+      - name: Upload Debug ELF Artifact
+        if: ${{ inputs.debug == true }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: wOPL-IIDX-Debug
+          path: |
+            wopl-iidx-debug.elf
+          if-no-files-found: warn
