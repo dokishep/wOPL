@@ -328,7 +328,6 @@ static void iidx_readReport(u8 *buf, iidx_device *pad)
     pad->ds2.PressureRight    = 0;
     pad->ds2.PressureTriangle = 0;
     pad->ds2.PressureL2       = 0;
-    pad->ds2.PressureR3       = 0;
 }
 
 static int iidxhid_probe(int devId)
