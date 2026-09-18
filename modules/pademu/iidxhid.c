@@ -27,7 +27,6 @@
 
 static iidx_device iidx_pad[IIDX_MAX_PADS];
 static struct pad_funcs padf[IIDX_MAX_PADS];
-static int usb_resultCode;
 
 static int iidxhid_probe(int devId);
 static int iidxhid_connect(int devId);
@@ -35,7 +34,6 @@ static int iidxhid_disconnect(int devId);
 static void iidx_release(int pad);
 static void iidx_config_set(int result, int count, void *arg);
 static void usb_data_cb(int resultCode, int bytes, void *arg);
-static void usb_cmd_cb(int resultCode, int bytes, void *arg);
 
 static int iidxhid_get_model(struct pad_funcs *pf, int port);
 static int iidxhid_get_data(struct pad_funcs *pf, u8 *dst, int size, int port);
@@ -43,26 +41,6 @@ static void iidxhid_set_rumble(struct pad_funcs *pf, u8 lrum, u8 rrum);
 static void iidxhid_set_mode(struct pad_funcs *pf, int mode, int lock);
 
 static UsbDriver iidxhid_driver = {NULL, NULL, "iidxhid", iidxhid_probe, iidxhid_connect, iidxhid_disconnect};
-
-static unsigned int timeout(void *arg)
-{
-    int sema = (int)arg;
-    iSignalSema(sema);
-    return 0;
-}
-
-static void TransferWait(int sema)
-{
-    iop_sys_clock_t cmd_timeout;
-
-    cmd_timeout.lo = 200000;
-    cmd_timeout.hi = 0;
-
-    if (SetAlarm(&cmd_timeout, timeout, (void *)sema) == 0) {
-        WaitSema(sema);
-        CancelAlarm(timeout, NULL);
-    }
-}
 
 
 static void iidx_process_turntable(iidx_device *pad, u16 x_raw, u8 *up_out, u8 *down_out)
@@ -365,7 +343,7 @@ static int iidxhid_connect(int devId)
     }
 
     iidx_pad[pad].status |= IIDXHID_STATE_CONNECTED;
-    sceUsbdSetConfiguration(iidx_pad[pad].controlEndp, config->bConfigurationValue, iidx_config_set, (void *)pad);
+    sceUsbdSetConfiguration(iidx_pad[pad].controlEndp, config->bConfigurationValue, iidx_config_set, (void *)(long)pad);
     SignalSema(iidx_pad[pad].sema);
 
     return 0;
@@ -390,6 +368,15 @@ static void iidx_config_set(int result, int count, void *arg)
     SignalSema(iidx_pad[pad].sema);
 
     pademu_connect(&padf[pad]);
+
+    /* Start asynchronous interrupt polling loop */
+    if (iidx_pad[pad].interruptEndp >= 0) {
+        sceUsbdInterruptTransfer(iidx_pad[pad].interruptEndp,
+                                 iidx_pad[pad].usb_buf,
+                                 sizeof(iidx_pad[pad].usb_buf),
+                                 usb_data_cb,
+                                 (void *)(long)pad);
+    }
 }
 
 static int iidxhid_disconnect(int devId)
@@ -415,13 +402,15 @@ static void iidx_release(int pad)
 {
     PollSema(iidx_pad[pad].sema);
 
-    if (iidx_pad[pad].interruptEndp >= 0)
+    iidx_pad[pad].status = IIDXHID_STATE_DISCONNECTED;
+
+    if (iidx_pad[pad].interruptEndp >= 0) {
         sceUsbdClosePipe(iidx_pad[pad].interruptEndp);
+        iidx_pad[pad].interruptEndp = -1;
+    }
 
     iidx_pad[pad].controlEndp = -1;
-    iidx_pad[pad].interruptEndp = -1;
     iidx_pad[pad].devId = -1;
-    iidx_pad[pad].status = IIDXHID_STATE_DISCONNECTED;
     iidx_pad[pad].layout_detected = 0;
     iidx_pad[pad].tt_up = 0;
     iidx_pad[pad].tt_down = 0;
@@ -432,44 +421,37 @@ static void iidx_release(int pad)
 static void usb_data_cb(int resultCode, int bytes, void *arg)
 {
     int pad = (int)(long)arg;
-    usb_resultCode = resultCode;
-    SignalSema(iidx_pad[pad].sema);
-}
 
-static void usb_cmd_cb(int resultCode, int bytes, void *arg)
-{
-    int pad = (int)(long)arg;
-    SignalSema(iidx_pad[pad].cmd_sema);
+    if (resultCode == USB_RC_OK) {
+        if (bytes > 0) {
+            iidx_readReport(iidx_pad[pad].usb_buf, &iidx_pad[pad]);
+        }
+        /* Re-submit next interrupt transfer asynchronously if still connected */
+        if ((iidx_pad[pad].status & IIDXHID_STATE_RUNNING) && iidx_pad[pad].interruptEndp >= 0) {
+            sceUsbdInterruptTransfer(iidx_pad[pad].interruptEndp,
+                                     iidx_pad[pad].usb_buf,
+                                     sizeof(iidx_pad[pad].usb_buf),
+                                     usb_data_cb,
+                                     (void *)(long)pad);
+        }
+    } else if (resultCode != USB_RC_ABORTED) {
+        /* On transient error, re-queue if still running */
+        if ((iidx_pad[pad].status & IIDXHID_STATE_RUNNING) && iidx_pad[pad].interruptEndp >= 0) {
+            sceUsbdInterruptTransfer(iidx_pad[pad].interruptEndp,
+                                     iidx_pad[pad].usb_buf,
+                                     sizeof(iidx_pad[pad].usb_buf),
+                                     usb_data_cb,
+                                     (void *)(long)pad);
+        }
+    }
 }
 
 static int iidxhid_get_data(struct pad_funcs *pf, u8 *dst, int size, int port)
 {
     iidx_device *pad = pf->priv;
-    int ret = 0;
-
-    if (!(pad->status & IIDXHID_STATE_RUNNING) || pad->interruptEndp < 0) {
-        memcpy(dst, pad->data, size);
-        return pad->analog_btn & 1;
-    }
-
-    WaitSema(pad->sema);
-    PollSema(pad->sema);
-
-    ret = sceUsbdInterruptTransfer(pad->interruptEndp, pad->usb_buf, sizeof(pad->usb_buf), usb_data_cb, (void *)(long)pad->pad_idx);
-
-    if (ret == USB_RC_OK) {
-        TransferWait(pad->sema);
-        if (!usb_resultCode)
-            iidx_readReport(pad->usb_buf, pad);
-
-        usb_resultCode = 1;
-    }
 
     memcpy(dst, pad->data, size);
-    ret = pad->analog_btn & 1;
-
-    SignalSema(pad->sema);
-    return ret;
+    return pad->analog_btn & 1;
 }
 
 static void iidxhid_set_rumble(struct pad_funcs *pf, u8 lrum, u8 rrum)
