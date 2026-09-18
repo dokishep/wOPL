@@ -240,7 +240,6 @@ static int iidxhid_probe(int devId)
     UsbConfigDescriptor *config = NULL;
     UsbInterfaceDescriptor *interface = NULL;
     UsbEndpointDescriptor *endpoint = NULL;
-    int epCount;
 
     device = (UsbDeviceDescriptor *)sceUsbdScanStaticDescriptor(devId, NULL, USB_DT_DEVICE);
     if (device == NULL) {
@@ -257,34 +256,27 @@ static int iidxhid_probe(int devId)
         return 0;
     }
 
-    interface = (UsbInterfaceDescriptor *)((char *)config + config->bLength);
-    if (interface == NULL) {
-        return 0;
-    }
+    /* Walk all interfaces in the configuration */
+    interface = (UsbInterfaceDescriptor *)sceUsbdScanStaticDescriptor(devId, config, USB_DT_INTERFACE);
+    while (interface != NULL) {
+        /* Must be USB HID class (0x03) */
+        if (interface->bInterfaceClass == 0x03) {
+            /* Reject keyboards (subclass 1, protocol 1) and mice (subclass 1, protocol 2) */
+            if (!(interface->bInterfaceSubClass == 1 &&
+                (interface->bInterfaceProtocol == 1 || interface->bInterfaceProtocol == 2))) {
 
-    /* Must be USB HID class (0x03) */
-    if (interface->bInterfaceClass != 0x03) {
-        return 0;
-    }
-
-    /* Reject keyboards (protocol 1) and mice (protocol 2) */
-    if (interface->bInterfaceSubClass == 1 &&
-        (interface->bInterfaceProtocol == 1 || interface->bInterfaceProtocol == 2)) {
-        return 0;
-    }
-
-    /* Find Interrupt IN endpoint */
-    endpoint = (UsbEndpointDescriptor *)sceUsbdScanStaticDescriptor(devId, NULL, USB_DT_ENDPOINT);
-    epCount = interface->bNumEndpoints;
-    while (endpoint != NULL && epCount > 0) {
-        if (endpoint->bmAttributes == USB_ENDPOINT_XFER_INT &&
-            (endpoint->bEndpointAddress & USB_ENDPOINT_DIR_MASK) == USB_DIR_IN) {
-            DPRINTF("IIDX HID probe matched! devId=%d VID=%04X PID=%04X epAddr=%02X\n",
-                    devId, device->idVendor, device->idProduct, endpoint->bEndpointAddress);
-            return 1;
+                /* Scan for Interrupt IN endpoint within this interface */
+                endpoint = (UsbEndpointDescriptor *)sceUsbdScanStaticDescriptor(devId, interface, USB_DT_ENDPOINT);
+                while (endpoint != NULL) {
+                    if (endpoint->bmAttributes == USB_ENDPOINT_XFER_INT &&
+                        (endpoint->bEndpointAddress & USB_ENDPOINT_DIR_MASK) == USB_DIR_IN) {
+                        return 1;
+                    }
+                    endpoint = (UsbEndpointDescriptor *)sceUsbdScanStaticDescriptor(devId, endpoint, USB_DT_ENDPOINT);
+                }
+            }
         }
-        endpoint = (UsbEndpointDescriptor *)((char *)endpoint + endpoint->bLength);
-        epCount--;
+        interface = (UsbInterfaceDescriptor *)sceUsbdScanStaticDescriptor(devId, interface, USB_DT_INTERFACE);
     }
 
     return 0;
@@ -297,7 +289,6 @@ static int iidxhid_connect(int devId)
     UsbConfigDescriptor *config;
     UsbInterfaceDescriptor *interface;
     UsbEndpointDescriptor *endpoint;
-    int epCount;
 
     DPRINTF("connect: devId=%i\n", devId);
 
@@ -315,7 +306,7 @@ static int iidxhid_connect(int devId)
 
     iidx_pad[pad].devId = devId;
     iidx_pad[pad].status = IIDXHID_STATE_AUTHORIZED;
-    iidx_pad[pad].controlEndp = UsbOpenEndpoint(devId, NULL);
+    iidx_pad[pad].controlEndp = sceUsbdOpenPipe(devId, NULL);
 
     device = (UsbDeviceDescriptor *)sceUsbdScanStaticDescriptor(devId, NULL, USB_DT_DEVICE);
     if (device == NULL) {
@@ -327,34 +318,34 @@ static int iidxhid_connect(int devId)
         iidx_release(pad);
         return 1;
     }
-    interface = (UsbInterfaceDescriptor *)((char *)config + config->bLength);
-    if (interface == NULL) {
-        iidx_release(pad);
-        return 1;
-    }
-    iidx_pad[pad].interfaceNumber = interface->bInterfaceNumber;
 
-    endpoint = (UsbEndpointDescriptor *)sceUsbdScanStaticDescriptor(devId, NULL, USB_DT_ENDPOINT);
-    if (endpoint == NULL) {
-        iidx_release(pad);
-        return 1;
-    }
-    epCount = interface->bNumEndpoints;
+    /* Walk interfaces to find the HID interface with an Interrupt IN endpoint */
+    interface = (UsbInterfaceDescriptor *)sceUsbdScanStaticDescriptor(devId, config, USB_DT_INTERFACE);
+    while (interface != NULL && iidx_pad[pad].interruptEndp < 0) {
+        if (interface->bInterfaceClass == 0x03) {
+            if (!(interface->bInterfaceSubClass == 1 &&
+                (interface->bInterfaceProtocol == 1 || interface->bInterfaceProtocol == 2))) {
 
-    do {
-        if (endpoint->bmAttributes == USB_ENDPOINT_XFER_INT) {
-            if ((endpoint->bEndpointAddress & USB_ENDPOINT_DIR_MASK) == USB_DIR_IN && iidx_pad[pad].interruptEndp < 0) {
-                u16 pkt = (endpoint->wMaxPacketSizeHB << 8) | endpoint->wMaxPacketSizeLB;
-                if (pkt == 0 || pkt > 64)
-                    pkt = 64;
-                iidx_pad[pad].packet_size = pkt;
-                iidx_pad[pad].interruptEndp = sceUsbdOpenPipe(devId, endpoint);
-                DPRINTF("Registered interrupt IN endpoint id=%d addr=%02X pktSize=%u\n",
-                        iidx_pad[pad].interruptEndp, endpoint->bEndpointAddress, pkt);
+                endpoint = (UsbEndpointDescriptor *)sceUsbdScanStaticDescriptor(devId, interface, USB_DT_ENDPOINT);
+                while (endpoint != NULL && iidx_pad[pad].interruptEndp < 0) {
+                    if (endpoint->bmAttributes == USB_ENDPOINT_XFER_INT &&
+                        (endpoint->bEndpointAddress & USB_ENDPOINT_DIR_MASK) == USB_DIR_IN) {
+                        u16 pkt = (endpoint->wMaxPacketSizeHB << 8) | endpoint->wMaxPacketSizeLB;
+                        if (pkt == 0 || pkt > 64)
+                            pkt = 64;
+                        iidx_pad[pad].packet_size = pkt;
+                        iidx_pad[pad].interfaceNumber = interface->bInterfaceNumber;
+                        iidx_pad[pad].interruptEndp = sceUsbdOpenPipe(devId, endpoint);
+                        DPRINTF("Registered interrupt IN endpoint id=%d addr=%02X pktSize=%u\n",
+                                iidx_pad[pad].interruptEndp, endpoint->bEndpointAddress, pkt);
+                        break;
+                    }
+                    endpoint = (UsbEndpointDescriptor *)sceUsbdScanStaticDescriptor(devId, endpoint, USB_DT_ENDPOINT);
+                }
             }
         }
-        endpoint = (UsbEndpointDescriptor *)((char *)endpoint + endpoint->bLength);
-    } while (--epCount > 0);
+        interface = (UsbInterfaceDescriptor *)sceUsbdScanStaticDescriptor(devId, interface, USB_DT_INTERFACE);
+    }
 
     if (iidx_pad[pad].interruptEndp < 0) {
         DPRINTF("connect: failed to open interrupt endpoint!\n");
