@@ -34,6 +34,7 @@ typedef struct _iidx_config
 
 typedef struct _iidx_device
 {
+    int pad_idx;
     int devId;
     int sema;
     int cmd_sema;
@@ -52,13 +53,10 @@ typedef struct _iidx_device
     /* Configuration */
     iidx_config_t config;
 
-    /* HID descriptor parsing info */
-    u8 has_parsed_desc;
-    u8 report_id;
-    u16 x_bit_offset;
-    u16 x_bit_size;
-    u16 btn_bit_offset;
-    u16 btn_count;
+    /* Auto-detected report offsets */
+    u8 layout_detected;
+    u8 x_byte_offset;
+    u8 btn_byte_offset;
 
     /* Debug tracking (for rate-limiting log output to state changes) */
     u32 last_raw_buttons;

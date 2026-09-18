@@ -64,110 +64,6 @@ static void TransferWait(int sema)
     }
 }
 
-static u32 get_bits(const u8 *buf, u16 bit_offset, u16 bit_size)
-{
-    u32 val = 0;
-    u16 i;
-    for (i = 0; i < bit_size && i < 32; i++) {
-        u16 bit = bit_offset + i;
-        if (buf[bit / 8] & (1 << (bit % 8))) {
-            val |= (1U << i);
-        }
-    }
-    return val;
-}
-
-static void iidx_parse_report_desc(iidx_device *pad, const u8 *desc, int len)
-{
-    int i = 0;
-    u32 cur_usage_page = 0;
-    u32 cur_report_size = 0;
-    u32 cur_report_count = 0;
-    u32 bit_offset = 0;
-    u32 usages[32];
-    int usage_count = 0;
-    int has_x = 0;
-    int has_btns = 0;
-
-    DPRINTF("Parsing HID report descriptor (%d bytes)...\n", len);
-
-    while (i < len) {
-        u8 prefix = desc[i++];
-        u8 bSize = prefix & 0x03;
-        u8 bType = (prefix >> 2) & 0x03;
-        u8 bTag = (prefix >> 4) & 0x0F;
-        u32 data = 0;
-        int j;
-
-        if (bSize == 3) bSize = 4;
-        if (i + bSize > len) break;
-
-        for (j = 0; j < bSize; j++) {
-            data |= ((u32)desc[i + j]) << (j * 8);
-        }
-        i += bSize;
-
-        if (bType == 1) { /* Global items */
-            switch (bTag) {
-                case 0: /* Usage Page */
-                    cur_usage_page = data;
-                    break;
-                case 7: /* Report Size */
-                    cur_report_size = data;
-                    break;
-                case 8: /* Report ID */
-                    pad->report_id = (u8)data;
-                    break;
-                case 9: /* Report Count */
-                    cur_report_count = data;
-                    break;
-                default:
-                    break;
-            }
-        } else if (bType == 2) { /* Local items */
-            switch (bTag) {
-                case 0: /* Usage */
-                    if (usage_count < 32) {
-                        usages[usage_count++] = data;
-                    }
-                    break;
-                default:
-                    break;
-            }
-        } else if (bType == 0) { /* Main items */
-            if (bTag == 8) { /* Input */
-                /* Check for X axis */
-                if (cur_usage_page == 0x01) { /* Generic Desktop */
-                    for (j = 0; j < usage_count; j++) {
-                        if (usages[j] == 0x30 && !has_x) { /* X axis */
-                            pad->x_bit_offset = bit_offset + (j * cur_report_size);
-                            pad->x_bit_size = (u16)cur_report_size;
-                            has_x = 1;
-                            break;
-                        }
-                    }
-                } else if (cur_usage_page == 0x09 && !has_btns) { /* Button */
-                    pad->btn_bit_offset = bit_offset;
-                    pad->btn_count = (u16)(cur_report_size * cur_report_count);
-                    has_btns = 1;
-                }
-
-                bit_offset += cur_report_size * cur_report_count;
-                usage_count = 0;
-            } else if (bTag == 10 || bTag == 12) { /* Collection / End Collection */
-                usage_count = 0;
-            }
-        }
-    }
-
-    if (has_x && has_btns) {
-        pad->has_parsed_desc = 1;
-        DPRINTF("Descriptor parse SUCCESS: X at bit %u (size %u), Btns at bit %u (count %u), ReportID %u\n",
-                pad->x_bit_offset, pad->x_bit_size, pad->btn_bit_offset, pad->btn_count, pad->report_id);
-    } else {
-        DPRINTF("Descriptor parse fallback: has_x=%d, has_btns=%d. Using standard offsets.\n", has_x, has_btns);
-    }
-}
 
 static void iidx_process_turntable(iidx_device *pad, u16 x_raw, u8 *up_out, u8 *down_out)
 {
@@ -216,17 +112,47 @@ static void iidx_readReport(u8 *buf, iidx_device *pad)
     u32 hid_buttons = 0;
     u8 up = 0, down = 0;
 
-    if (pad->has_parsed_desc) {
-        u16 offset = pad->report_id ? 8 : 0;
-        x_raw = (u16)get_bits(buf, pad->x_bit_offset + offset, pad->x_bit_size ? pad->x_bit_size : 16);
-        hid_buttons = get_bits(buf, pad->btn_bit_offset + offset, pad->btn_count ? pad->btn_count : 32);
+    /*
+     * Non-blocking dynamic layout auto-detection based on turntable resting center value (~32767).
+     * Once detected, layout_detected is locked to 1.
+     */
+    if (!pad->layout_detected) {
+        u16 c0 = (u16)(buf[0] | (buf[1] << 8));
+        u16 c1 = (u16)(buf[1] | (buf[2] << 8));
+        u16 c4 = (u16)(buf[4] | (buf[5] << 8));
+        u16 c5 = (u16)(buf[5] | (buf[6] << 8));
+
+        if (c0 >= 24000 && c0 <= 42000) {
+            pad->x_byte_offset = 0;
+            pad->btn_byte_offset = 12;
+            pad->layout_detected = 1;
+            DPRINTF("Auto-detected layout 1: X at offset 0, Buttons at offset 12\n");
+        } else if (c1 >= 24000 && c1 <= 42000) {
+            pad->x_byte_offset = 1;
+            pad->btn_byte_offset = 13;
+            pad->layout_detected = 1;
+            DPRINTF("Auto-detected layout 2: X at offset 1, Buttons at offset 13\n");
+        } else if (c4 >= 24000 && c4 <= 42000) {
+            pad->x_byte_offset = 4;
+            pad->btn_byte_offset = 0;
+            pad->layout_detected = 1;
+            DPRINTF("Auto-detected layout 3: X at offset 4, Buttons at offset 0\n");
+        } else if (c5 >= 24000 && c5 <= 42000) {
+            pad->x_byte_offset = 5;
+            pad->btn_byte_offset = 1;
+            pad->layout_detected = 1;
+            DPRINTF("Auto-detected layout 4: X at offset 5, Buttons at offset 1\n");
+        }
+    }
+
+    if (pad->layout_detected) {
+        int xo = pad->x_byte_offset;
+        int bo = pad->btn_byte_offset;
+        x_raw = (u16)(buf[xo] | (buf[xo + 1] << 8));
+        hid_buttons = (u32)(buf[bo] | (buf[bo + 1] << 8) | (buf[bo + 2] << 16) | (buf[bo + 3] << 24));
     } else {
-        /*
-         * Fallback heuristic:
-         * 1) If report ID is present at buf[0], data is shifted by 1 byte.
-         * 2) Otherwise check standard Layout 1 (X axis at offset 0, buttons at offset 12).
-         */
-        if (buf[0] == pad->report_id && pad->report_id != 0) {
+        /* Fallback if controller booted while turntable was actively held away from center */
+        if (buf[0] != 0 && buf[0] < 8) {
             x_raw = (u16)(buf[1] | (buf[2] << 8));
             hid_buttons = (u32)(buf[13] | (buf[14] << 8) | (buf[15] << 16) | (buf[16] << 24));
         } else {
@@ -447,9 +373,7 @@ static int iidxhid_connect(int devId)
 
 static void iidx_config_set(int result, int count, void *arg)
 {
-    int pad = (int)arg;
-    int ret;
-    u8 desc_buf[256];
+    int pad = (int)(long)arg;
 
     PollSema(iidx_pad[pad].sema);
 
@@ -461,24 +385,6 @@ static void iidx_config_set(int result, int count, void *arg)
     iidx_pad[pad].ds2.RightStickY = 128;
     iidx_pad[pad].ds2.LeftStickX = 128;
     iidx_pad[pad].ds2.LeftStickY = 128;
-
-    /* Read HID Report Descriptor */
-    memset(desc_buf, 0, sizeof(desc_buf));
-    ret = sceUsbdControlTransfer(iidx_pad[pad].controlEndp,
-                                 USB_DIR_IN | USB_TYPE_STANDARD | USB_RECIP_INTERFACE,
-                                 USB_REQ_GET_DESCRIPTOR,
-                                 (0x22 << 8) | 0,
-                                 iidx_pad[pad].interfaceNumber,
-                                 sizeof(desc_buf),
-                                 desc_buf,
-                                 usb_cmd_cb,
-                                 (void *)pad);
-    if (ret == USB_RC_OK) {
-        TransferWait(iidx_pad[pad].cmd_sema);
-        iidx_parse_report_desc(&iidx_pad[pad], desc_buf, sizeof(desc_buf));
-    } else {
-        DPRINTF("GetReportDescriptor transfer error %d\n", ret);
-    }
 
     iidx_pad[pad].status |= IIDXHID_STATE_RUNNING;
     SignalSema(iidx_pad[pad].sema);
@@ -516,7 +422,7 @@ static void iidx_release(int pad)
     iidx_pad[pad].interruptEndp = -1;
     iidx_pad[pad].devId = -1;
     iidx_pad[pad].status = IIDXHID_STATE_DISCONNECTED;
-    iidx_pad[pad].has_parsed_desc = 0;
+    iidx_pad[pad].layout_detected = 0;
     iidx_pad[pad].tt_up = 0;
     iidx_pad[pad].tt_down = 0;
 
@@ -525,14 +431,14 @@ static void iidx_release(int pad)
 
 static void usb_data_cb(int resultCode, int bytes, void *arg)
 {
-    int pad = (int)arg;
+    int pad = (int)(long)arg;
     usb_resultCode = resultCode;
     SignalSema(iidx_pad[pad].sema);
 }
 
 static void usb_cmd_cb(int resultCode, int bytes, void *arg)
 {
-    int pad = (int)arg;
+    int pad = (int)(long)arg;
     SignalSema(iidx_pad[pad].cmd_sema);
 }
 
@@ -541,10 +447,15 @@ static int iidxhid_get_data(struct pad_funcs *pf, u8 *dst, int size, int port)
     iidx_device *pad = pf->priv;
     int ret = 0;
 
+    if (!(pad->status & IIDXHID_STATE_RUNNING) || pad->interruptEndp < 0) {
+        memcpy(dst, pad->data, size);
+        return pad->analog_btn & 1;
+    }
+
     WaitSema(pad->sema);
     PollSema(pad->sema);
 
-    ret = sceUsbdInterruptTransfer(pad->interruptEndp, pad->usb_buf, sizeof(pad->usb_buf), usb_data_cb, (void *)port);
+    ret = sceUsbdInterruptTransfer(pad->interruptEndp, pad->usb_buf, sizeof(pad->usb_buf), usb_data_cb, (void *)(long)pad->pad_idx);
 
     if (ret == USB_RC_OK) {
         TransferWait(pad->sema);
@@ -596,6 +507,7 @@ int iidxhid_init(u8 pad_enable, u8 pad_options)
     sema.max = 1;
 
     for (pad = 0; pad < IIDX_MAX_PADS; pad++) {
+        iidx_pad[pad].pad_idx = pad;
         iidx_pad[pad].sema = CreateSema(&sema);
         iidx_pad[pad].cmd_sema = CreateSema(&sema);
         iidx_pad[pad].devId = -1;
@@ -614,7 +526,9 @@ int iidxhid_init(u8 pad_enable, u8 pad_options)
         iidx_pad[pad].config.vid_filter = 0;
         iidx_pad[pad].config.pid_filter = 0;
 
-        iidx_pad[pad].has_parsed_desc = 0;
+        iidx_pad[pad].layout_detected = 0;
+        iidx_pad[pad].x_byte_offset = 0;
+        iidx_pad[pad].btn_byte_offset = 12;
         iidx_pad[pad].tt_up = 0;
         iidx_pad[pad].tt_down = 0;
         iidx_pad[pad].last_x = 0x7FFF;
