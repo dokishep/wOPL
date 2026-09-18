@@ -34,6 +34,8 @@ DETAILED_CHANGELOG
 !.clang-format
 !.clang-format-ignore
 !modules/debug/*.irx
+!modules/usb-vendor/
+!modules/usb-vendor/**
 
 #
 # Generated source files

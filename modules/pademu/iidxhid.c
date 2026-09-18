@@ -318,11 +318,27 @@ static int iidxhid_connect(int devId)
     iidx_pad[pad].controlEndp = UsbOpenEndpoint(devId, NULL);
 
     device = (UsbDeviceDescriptor *)sceUsbdScanStaticDescriptor(devId, NULL, USB_DT_DEVICE);
+    if (device == NULL) {
+        iidx_release(pad);
+        return 1;
+    }
     config = (UsbConfigDescriptor *)sceUsbdScanStaticDescriptor(devId, device, USB_DT_CONFIG);
+    if (config == NULL) {
+        iidx_release(pad);
+        return 1;
+    }
     interface = (UsbInterfaceDescriptor *)((char *)config + config->bLength);
+    if (interface == NULL) {
+        iidx_release(pad);
+        return 1;
+    }
     iidx_pad[pad].interfaceNumber = interface->bInterfaceNumber;
 
     endpoint = (UsbEndpointDescriptor *)sceUsbdScanStaticDescriptor(devId, NULL, USB_DT_ENDPOINT);
+    if (endpoint == NULL) {
+        iidx_release(pad);
+        return 1;
+    }
     epCount = interface->bNumEndpoints;
 
     do {
