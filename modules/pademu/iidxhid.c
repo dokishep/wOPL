@@ -234,49 +234,81 @@ static void iidx_readReport(u8 *buf, iidx_device *pad)
     pad->ds2.PressureL2       = 0;
 }
 
+#ifndef USB_CLASS_HID
+#define USB_CLASS_HID 0x03
+#endif
+
+#ifndef USB_DT_INTERFACE
+#define USB_DT_INTERFACE 0x04
+#endif
+
+#ifndef USB_DT_ENDPOINT
+#define USB_DT_ENDPOINT 0x05
+#endif
+
 static int iidxhid_probe(int devId)
 {
     UsbDeviceDescriptor *device = NULL;
     UsbConfigDescriptor *config = NULL;
-    UsbInterfaceDescriptor *interface = NULL;
-    UsbEndpointDescriptor *endpoint = NULL;
+
+    DPRINTF("probe: devId=%i\n", devId);
 
     device = (UsbDeviceDescriptor *)sceUsbdScanStaticDescriptor(devId, NULL, USB_DT_DEVICE);
     if (device == NULL) {
         return 0;
     }
 
-    /* Exclude Sony devices (handled by ds34usb / ds34bt) */
-    if (device->idVendor == SONY_VID || device->idVendor == DS34_VID) {
+    /* Exclude Sony DualShock controllers (handled by ds34usb / ds34bt) */
+    if (device->idVendor == DS34_VID ||
+        (device->idVendor == SONY_VID &&
+         (device->idProduct == DS3_PID || device->idProduct == DS4_PID ||
+          device->idProduct == DS4_PID_SLIM || device->idProduct == DS5_PID ||
+          device->idProduct == GUITAR_HERO_PS3_PID || device->idProduct == ROCK_BAND_PS3_PID))) {
         return 0;
     }
 
     config = (UsbConfigDescriptor *)sceUsbdScanStaticDescriptor(devId, device, USB_DT_CONFIG);
-    if (config == NULL) {
+    if (config == NULL || config->wTotalLength < sizeof(UsbConfigDescriptor)) {
         return 0;
     }
 
-    /* Walk all interfaces in the configuration */
-    interface = (UsbInterfaceDescriptor *)sceUsbdScanStaticDescriptor(devId, config, USB_DT_INTERFACE);
-    while (interface != NULL) {
-        /* Must be USB HID class (0x03) */
-        if (interface->bInterfaceClass == 0x03) {
-            /* Reject keyboards (subclass 1, protocol 1) and mice (subclass 1, protocol 2) */
-            if (!(interface->bInterfaceSubClass == 1 &&
-                (interface->bInterfaceProtocol == 1 || interface->bInterfaceProtocol == 2))) {
+    /*
+     * Walk configuration descriptor buffer directly.
+     * In FreeUsbd, sceUsbdScanStaticDescriptor does not scan USB_DT_INTERFACE,
+     * so scanning the raw contiguous descriptor buffer is the standard PS2SDK pattern.
+     */
+    const u8 *p = (const u8 *)config;
+    const u8 *end = p + config->wTotalLength;
+    int is_hid = 0;
 
-                /* Scan for Interrupt IN endpoint within this interface */
-                endpoint = (UsbEndpointDescriptor *)sceUsbdScanStaticDescriptor(devId, interface, USB_DT_ENDPOINT);
-                while (endpoint != NULL) {
-                    if (endpoint->bmAttributes == USB_ENDPOINT_XFER_INT &&
-                        (endpoint->bEndpointAddress & USB_ENDPOINT_DIR_MASK) == USB_DIR_IN) {
-                        return 1;
-                    }
-                    endpoint = (UsbEndpointDescriptor *)sceUsbdScanStaticDescriptor(devId, endpoint, USB_DT_ENDPOINT);
+    while (p + 2 <= end) {
+        u8 len = p[0];
+        u8 type = p[1];
+        if (len < 2 || p + len > end)
+            break;
+
+        if (type == USB_DT_INTERFACE && len >= sizeof(UsbInterfaceDescriptor)) {
+            UsbInterfaceDescriptor *intf = (UsbInterfaceDescriptor *)p;
+            if (intf->bInterfaceClass == USB_CLASS_HID) {
+                /* Exclude boot keyboard (subclass 1, proto 1) and boot mouse (subclass 1, proto 2) */
+                if (!(intf->bInterfaceSubClass == 1 &&
+                     (intf->bInterfaceProtocol == 1 || intf->bInterfaceProtocol == 2))) {
+                    is_hid = 1;
+                } else {
+                    is_hid = 0;
                 }
+            } else {
+                is_hid = 0;
+            }
+        } else if (type == USB_DT_ENDPOINT && is_hid && len >= sizeof(UsbEndpointDescriptor)) {
+            UsbEndpointDescriptor *ep = (UsbEndpointDescriptor *)p;
+            if (ep->bmAttributes == USB_ENDPOINT_XFER_INT &&
+                (ep->bEndpointAddress & USB_ENDPOINT_DIR_MASK) == USB_DIR_IN) {
+                return 1;
             }
         }
-        interface = (UsbInterfaceDescriptor *)sceUsbdScanStaticDescriptor(devId, interface, USB_DT_INTERFACE);
+
+        p += len;
     }
 
     return 0;
@@ -287,13 +319,11 @@ static int iidxhid_connect(int devId)
     int pad;
     UsbDeviceDescriptor *device;
     UsbConfigDescriptor *config;
-    UsbInterfaceDescriptor *interface;
-    UsbEndpointDescriptor *endpoint;
 
     DPRINTF("connect: devId=%i\n", devId);
 
     for (pad = 0; pad < IIDX_MAX_PADS; pad++) {
-        if (iidx_pad[pad].devId == -1 && iidx_pad[pad].enabled)
+        if (iidx_pad[pad].devId == -1)
             break;
     }
 
@@ -314,37 +344,53 @@ static int iidxhid_connect(int devId)
         return 1;
     }
     config = (UsbConfigDescriptor *)sceUsbdScanStaticDescriptor(devId, device, USB_DT_CONFIG);
-    if (config == NULL) {
+    if (config == NULL || config->wTotalLength < sizeof(UsbConfigDescriptor)) {
         iidx_release(pad);
         return 1;
     }
 
-    /* Walk interfaces to find the HID interface with an Interrupt IN endpoint */
-    interface = (UsbInterfaceDescriptor *)sceUsbdScanStaticDescriptor(devId, config, USB_DT_INTERFACE);
-    while (interface != NULL && iidx_pad[pad].interruptEndp < 0) {
-        if (interface->bInterfaceClass == 0x03) {
-            if (!(interface->bInterfaceSubClass == 1 &&
-                (interface->bInterfaceProtocol == 1 || interface->bInterfaceProtocol == 2))) {
+    /* Walk config buffer to find HID interface and Interrupt IN endpoint */
+    const u8 *p = (const u8 *)config;
+    const u8 *end = p + config->wTotalLength;
+    int is_hid = 0;
+    int cur_intf = 0;
 
-                endpoint = (UsbEndpointDescriptor *)sceUsbdScanStaticDescriptor(devId, interface, USB_DT_ENDPOINT);
-                while (endpoint != NULL && iidx_pad[pad].interruptEndp < 0) {
-                    if (endpoint->bmAttributes == USB_ENDPOINT_XFER_INT &&
-                        (endpoint->bEndpointAddress & USB_ENDPOINT_DIR_MASK) == USB_DIR_IN) {
-                        u16 pkt = (endpoint->wMaxPacketSizeHB << 8) | endpoint->wMaxPacketSizeLB;
-                        if (pkt == 0 || pkt > 64)
-                            pkt = 64;
-                        iidx_pad[pad].packet_size = pkt;
-                        iidx_pad[pad].interfaceNumber = interface->bInterfaceNumber;
-                        iidx_pad[pad].interruptEndp = sceUsbdOpenPipe(devId, endpoint);
-                        DPRINTF("Registered interrupt IN endpoint id=%d addr=%02X pktSize=%u\n",
-                                iidx_pad[pad].interruptEndp, endpoint->bEndpointAddress, pkt);
-                        break;
-                    }
-                    endpoint = (UsbEndpointDescriptor *)sceUsbdScanStaticDescriptor(devId, endpoint, USB_DT_ENDPOINT);
+    while (p + 2 <= end && iidx_pad[pad].interruptEndp < 0) {
+        u8 len = p[0];
+        u8 type = p[1];
+        if (len < 2 || p + len > end)
+            break;
+
+        if (type == USB_DT_INTERFACE && len >= sizeof(UsbInterfaceDescriptor)) {
+            UsbInterfaceDescriptor *intf = (UsbInterfaceDescriptor *)p;
+            if (intf->bInterfaceClass == USB_CLASS_HID) {
+                if (!(intf->bInterfaceSubClass == 1 &&
+                     (intf->bInterfaceProtocol == 1 || intf->bInterfaceProtocol == 2))) {
+                    is_hid = 1;
+                    cur_intf = intf->bInterfaceNumber;
+                } else {
+                    is_hid = 0;
                 }
+            } else {
+                is_hid = 0;
+            }
+        } else if (type == USB_DT_ENDPOINT && is_hid && len >= sizeof(UsbEndpointDescriptor)) {
+            UsbEndpointDescriptor *ep = (UsbEndpointDescriptor *)p;
+            if (ep->bmAttributes == USB_ENDPOINT_XFER_INT &&
+                (ep->bEndpointAddress & USB_ENDPOINT_DIR_MASK) == USB_DIR_IN) {
+                u16 pkt = (ep->wMaxPacketSizeHB << 8) | ep->wMaxPacketSizeLB;
+                if (pkt == 0 || pkt > 64)
+                    pkt = 64;
+                iidx_pad[pad].packet_size = pkt;
+                iidx_pad[pad].interfaceNumber = cur_intf;
+                iidx_pad[pad].interruptEndp = sceUsbdOpenPipe(devId, ep);
+                DPRINTF("Registered interrupt IN endpoint id=%d addr=%02X pktSize=%u\n",
+                        iidx_pad[pad].interruptEndp, ep->bEndpointAddress, pkt);
+                break;
             }
         }
-        interface = (UsbInterfaceDescriptor *)sceUsbdScanStaticDescriptor(devId, interface, USB_DT_INTERFACE);
+
+        p += len;
     }
 
     if (iidx_pad[pad].interruptEndp < 0) {
@@ -353,7 +399,18 @@ static int iidxhid_connect(int devId)
         return 1;
     }
 
-    iidx_pad[pad].status |= IIDXHID_STATE_CONNECTED;
+    iidx_pad[pad].status |= (IIDXHID_STATE_CONNECTED | IIDXHID_STATE_RUNNING);
+
+    /* Initialize controller state immediately so pad is fully valid when SIO2 queries */
+    iidx_pad[pad].ds2.nButtonState = 0xFFFF;
+    iidx_pad[pad].ds2.RightStickX = 128;
+    iidx_pad[pad].ds2.RightStickY = 128;
+    iidx_pad[pad].ds2.LeftStickX = 128;
+    iidx_pad[pad].ds2.LeftStickY = 128;
+
+    /* Connect pad to PADEMU immediately */
+    pademu_connect(&padf[pad]);
+
     sceUsbdSetConfiguration(iidx_pad[pad].controlEndp, config->bConfigurationValue, iidx_config_set, (void *)(long)pad);
     SignalSema(iidx_pad[pad].sema);
 
@@ -366,19 +423,12 @@ static void iidx_config_set(int result, int count, void *arg)
 
     PollSema(iidx_pad[pad].sema);
 
-    iidx_pad[pad].status |= IIDXHID_STATE_CONFIGURED;
+    iidx_pad[pad].status |= (IIDXHID_STATE_CONFIGURED | IIDXHID_STATE_RUNNING);
 
-    /* Initialize controller state to all buttons released */
-    iidx_pad[pad].ds2.nButtonState = 0xFFFF;
-    iidx_pad[pad].ds2.RightStickX = 128;
-    iidx_pad[pad].ds2.RightStickY = 128;
-    iidx_pad[pad].ds2.LeftStickX = 128;
-    iidx_pad[pad].ds2.LeftStickY = 128;
-
-    iidx_pad[pad].status |= IIDXHID_STATE_RUNNING;
-    SignalSema(iidx_pad[pad].sema);
-
+    /* Ensure pad is connected to PADEMU */
     pademu_connect(&padf[pad]);
+
+    SignalSema(iidx_pad[pad].sema);
 
     /* Start asynchronous interrupt polling loop */
     if (iidx_pad[pad].interruptEndp >= 0 && !iidx_pad[pad].transfer_active) {
@@ -446,22 +496,22 @@ static void usb_data_cb(int resultCode, int bytes, void *arg)
         if (bytes > 0) {
             iidx_readReport(iidx_pad[pad].usb_buf, &iidx_pad[pad]);
         }
-        /* Re-submit next interrupt transfer asynchronously if still connected */
-        if ((iidx_pad[pad].status & IIDXHID_STATE_RUNNING) && iidx_pad[pad].interruptEndp >= 0) {
-            int ret;
-            iidx_pad[pad].transfer_active = 1;
-            ret = sceUsbdInterruptTransfer(iidx_pad[pad].interruptEndp,
-                                           iidx_pad[pad].usb_buf,
-                                           iidx_pad[pad].packet_size ? iidx_pad[pad].packet_size : 64,
-                                           usb_data_cb,
-                                           (void *)(long)pad);
-            if (ret != USB_RC_OK) {
-                iidx_pad[pad].transfer_active = 0;
-            }
-        }
     } else {
-        /* DO NOT RE-QUEUE ON ERROR: Prevents infinite recursion / lockups on USBD thread */
-        DPRINTF("usb_data_cb error: %d\n", resultCode);
+        DPRINTF("usb_data_cb result: %d\n", resultCode);
+    }
+
+    /* Re-submit next interrupt transfer asynchronously if still running */
+    if ((iidx_pad[pad].status & IIDXHID_STATE_RUNNING) && iidx_pad[pad].interruptEndp >= 0) {
+        int ret;
+        iidx_pad[pad].transfer_active = 1;
+        ret = sceUsbdInterruptTransfer(iidx_pad[pad].interruptEndp,
+                                       iidx_pad[pad].usb_buf,
+                                       iidx_pad[pad].packet_size ? iidx_pad[pad].packet_size : 64,
+                                       usb_data_cb,
+                                       (void *)(long)pad);
+        if (ret != USB_RC_OK) {
+            iidx_pad[pad].transfer_active = 0;
+        }
     }
 }
 

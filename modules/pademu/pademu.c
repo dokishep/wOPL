@@ -125,6 +125,11 @@ int _start(int argc, char *argv[])
         padMacroInit(macro_settings);
     }
 
+    /* Fallback: if pademu is loaded, ensure at least Port 1 is enabled */
+    if (pad_enable == 0) {
+        pad_enable = 0x01;
+    }
+
     if (RegisterLibraryEntries(&_exp_pademu) != 0) {
         return MODULE_NO_RESIDENT_END;
     }
