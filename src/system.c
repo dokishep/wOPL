@@ -544,7 +544,11 @@ static unsigned int sendIrxKernelRAM(const char *startup, const char *mode_str, 
         irxptr_tab[modcount++].ptr = (void *)&usbd_irx;
     }
     if (modules & CORE_IRX_USB) {
+#ifdef PADEMU
+        if (devId || gEnablePadEmu) {
+#else
         if (devId) {
+#endif
             irxptr_tab[modcount].info = size_usbmass_bd_irx | SET_OPL_MOD_ID(OPL_MODULE_ID_USBMASSBD);
             irxptr_tab[modcount++].ptr = (void *)&usbmass_bd_irx;
         } else {
