@@ -168,7 +168,7 @@ int doUnregisterDriver(sceUsbdLddOps *drv)
 void connectNewDevice(Device *dev)
 {
     sceUsbdLddOps *drv;
-    usbd_diag_log("DRV: dev %d FA %x", dev->id, dev->functionAddress);
+    usbd_diag_log("DRV: dev %d FA %x", (int)dev->id, (unsigned int)dev->functionAddress);
     dbg_printf("searching driver for dev %d, FA %02X\n", dev->id, dev->functionAddress);
     for (drv = drvListStart; drv != NULL; drv = drv->next)
         if (callUsbDriverFunc(drv->probe, dev->id, drv->gp) != 0) {

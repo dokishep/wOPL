@@ -219,13 +219,13 @@ void handleRhsc(void)
         memPool.ohciRegs->HcRhPortStatus[portNum] = C_PORT_FLAGS; // reset all flags
         if (status & BIT(PORT_CONNECTION)) {
             if (port->deviceStatus == DEVICE_NOTCONNECTED) {
-                usbd_diag_log("HCD: P%d conn, 500ms rst", portNum + 1);
+                usbd_diag_log("HCD: P%d conn, 500ms rst", (int)(portNum + 1));
                 port->deviceStatus = DEVICE_CONNECTED;
                 port->resetRetries = 0;
                 addTimerCallback(&port->timer, (TimerCallback)hubResetDevice, port, 500);
             } else if (port->deviceStatus == DEVICE_RESETPENDING) {
                 if (!(status & BIT(PORT_RESET))) {
-                    usbd_diag_log("HCD: P%d rst ok spd=%d", portNum + 1, (status >> PORT_LOW_SPEED) & 1);
+                    usbd_diag_log("HCD: P%d rst ok spd=%d", (int)(portNum + 1), (int)((status >> PORT_LOW_SPEED) & 1));
                     port->deviceStatus     = DEVICE_RESETCOMPLETE;
                     port->isLowSpeedDevice = (status >> PORT_LOW_SPEED) & 1;
                     hubPortResetDone(port);
@@ -233,7 +233,7 @@ void handleRhsc(void)
             }
         } else {
             if (port->deviceStatus != DEVICE_NOTCONNECTED)
-                usbd_diag_log("HCD: P%d disc st=%x", portNum + 1, status);
+                usbd_diag_log("HCD: P%d disc st=%x", (int)(portNum + 1), (unsigned int)status);
             flushPort(port);
         }
         port = port->next;
