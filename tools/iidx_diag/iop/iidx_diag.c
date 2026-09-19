@@ -218,6 +218,7 @@ static int diag_connect(int devId)
 static void diag_config_set(int result, int count, void *arg)
 {
     int devId = (int)(long)arg;
+    (void)devId;
 
     PollSema(diag_sema);
 
@@ -345,12 +346,34 @@ static int diag_disconnect(int devId)
 typedef int (*sceUsbdGetDiagLog_t)(char *dst, int max_len);
 static sceUsbdGetDiagLog_t p_sceUsbdGetDiagLog = NULL;
 
+static void *get_export_table(const char *name, int version)
+{
+    iop_library_t lib;
+    int i;
+    const char *p;
+
+    memset(&lib, 0, sizeof(lib));
+    lib.version = version;
+    for (i = 0, p = name; (i < 8) && (*p); i++, p++)
+        lib.name[i] = *p;
+
+    return QueryLibraryEntryTable(&lib);
+}
+
 static void init_usbd_diag_hook(void)
 {
-    struct irx_export_table *lib = QueryLibraryEntryTable("usbd");
-    if (lib) {
+    void *table = get_export_table("usbd", 0x101);
+    if (!table)
+        table = get_export_table("usbd", 0);
+    if (table) {
+        void **exp = (void **)table;
+        int size = 0;
+        while (exp[size] != NULL)
+            size++;
         /* In modules/usbd/exports.tab, sceUsbdGetDiagLog is entry 17 */
-        p_sceUsbdGetDiagLog = (sceUsbdGetDiagLog_t)lib->fptrs[17];
+        if (size > 17) {
+            p_sceUsbdGetDiagLog = (sceUsbdGetDiagLog_t)exp[17];
+        }
     }
 }
 
