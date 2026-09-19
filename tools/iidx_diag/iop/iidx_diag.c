@@ -352,7 +352,7 @@ static void init_usbd_diag_hook(void)
 
     lib = GetLoadcoreInternalData()->let_next;
     while (lib != NULL) {
-        if (strncmp(lib->name, "usbd", 4) == 0) {
+        if (lib->name[0] == 'u' && lib->name[1] == 's' && lib->name[2] == 'b' && lib->name[3] == 'd') {
             void **exp = (void **)((u32)lib + 0x14);
             p_sceUsbdGetDiagLog = (sceUsbdGetDiagLog_t)exp[17];
             add_log_entry("USBD hook: OK");

@@ -42,4 +42,5 @@ I_memset
 I_memcpy
 I_sprintf
 I_strncpy
+I_strncmp
 sysclib_IMPORTS_end
