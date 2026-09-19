@@ -365,16 +365,17 @@ static void *rpc_sf(int cmd, void *data, int size)
 static void rpc_thread(void *data)
 {
     (void)data;
-    sceSifInitRpc(0);
-    sceSifSetRpcQueue(&rpc_que, GetThreadId());
-    sceSifRegisterRpc(&rpc_svr, IIDX_DIAG_RPC_ID, rpc_sf, rpc_buf, NULL, NULL, &rpc_que);
-    sceSifRpcLoop(&rpc_que);
+    SifInitRpc(0);
+    SifSetRpcQueue(&rpc_que, GetThreadId());
+    SifRegisterRpc(&rpc_svr, IIDX_DIAG_RPC_ID, rpc_sf, rpc_buf, NULL, NULL, &rpc_que);
+    SifRpcLoop(&rpc_que);
 }
 
 int _start(int argc, char *argv[])
 {
     iop_thread_t th;
     int thid;
+    int ret;
     (void)argc;
     (void)argv;
 
@@ -389,11 +390,7 @@ int _start(int argc, char *argv[])
     memset(&diag_info, 0, sizeof(diag_info));
     add_log_entry("Diagnostic driver started");
 
-    if (sceUsbdRegisterLdd(&diag_driver) != USB_RC_OK) {
-        printf(MODNAME ": failed to register USBD driver\n");
-        return MODULE_NO_RESIDENT_END;
-    }
-
+    /* Start RPC thread FIRST so EE can always connect and receive diagnostic data */
     th.attr = TH_C;
     th.thread = rpc_thread;
     th.priority = 40;
@@ -403,8 +400,18 @@ int _start(int argc, char *argv[])
     thid = CreateThread(&th);
     if (thid > 0) {
         StartThread(thid, NULL);
-        return MODULE_RESIDENT_END;
+    } else {
+        printf(MODNAME ": failed to create RPC thread\n");
+        return MODULE_NO_RESIDENT_END;
     }
 
-    return MODULE_NO_RESIDENT_END;
+    ret = sceUsbdRegisterLdd(&diag_driver);
+    if (ret != USB_RC_OK) {
+        printf(MODNAME ": failed to register USBD driver (ret=%d)\n", ret);
+        add_log_entry("Register USBD driver FAILED");
+    } else {
+        add_log_entry("USBD driver registered OK");
+    }
+
+    return MODULE_RESIDENT_END;
 }

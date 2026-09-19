@@ -10,6 +10,7 @@
 #include <string.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <sbv_patches.h>
 
 #include "../include/iidx_diag.h"
 
@@ -114,14 +115,27 @@ int main(int argc, char *argv[])
     while (!SifIopSync()) ;
     SifInitRpc(0);
     SifLoadFileInit();
+    SifInitIopHeap();
+
+    /* Apply SBV patches so SifExecModuleBuffer works */
+    sbv_patch_enable_lmb();
+    sbv_patch_disable_prefix_check();
+
+    /* Load SIO2MAN and PADMAN from ROM so controller port 2 works */
+    SifLoadModule("rom0:SIO2MAN", 0, 0);
+    SifLoadModule("rom0:PADMAN", 0, 0);
 
     /* Load USBD */
-    scr_printf("Loading USBD driver...\n");
+    scr_printf("Loading USBD driver... ");
+    ret = -999;
     SifExecModuleBuffer(&usbd_mini_irx, size_usbd_mini_irx, 0, NULL, &ret);
+    scr_printf("id=%d\n", ret);
 
     /* Load IIDX Diag IOP driver */
-    scr_printf("Loading IIDX Diag IOP driver...\n");
+    scr_printf("Loading IIDX Diag IOP driver... ");
+    ret = -999;
     SifExecModuleBuffer(&iidx_diag_irx, size_iidx_diag_irx, 0, NULL, &ret);
+    scr_printf("id=%d\n", ret);
 
     /* Bind to RPC */
     scr_printf("Connecting to diagnostic RPC server...\n");
@@ -130,6 +144,7 @@ int main(int argc, char *argv[])
             scr_printf("RPC bind error, retrying...\n");
             sleep(1);
         }
+        nopdelay();
     } while (!diag_client.server);
 
     /* Init DualShock pads (try Port 0 and Port 1) */
