@@ -76,11 +76,11 @@ static void iidx_process_turntable(iidx_device *pad, u16 x_raw, u8 *up_out, u8 *
 
     /* Inversion option */
     if (pad->config.invert_turntable) {
-        *up_out = pad->tt_down;
-        *down_out = pad->tt_up;
-    } else {
         *up_out = pad->tt_up;
         *down_out = pad->tt_down;
+    } else {
+        *up_out = pad->tt_down;
+        *down_out = pad->tt_up;
     }
 }
 

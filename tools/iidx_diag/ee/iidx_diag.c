@@ -325,7 +325,7 @@ int main(int argc, char *argv[])
                 u8 b2 = (diag.last_bytes > 2) ? diag.current_packet[2] : 0;
                 s16 tt = (diag.last_bytes >= 7 && diag.current_packet[0] == 0x06) ?
                          (s16)(diag.current_packet[5] | (diag.current_packet[6] << 8)) : 0;
-                const char *tt_str = (tt > 16000) ? "CW [DOWN]" : (tt < -16000) ? "CCW [UP] " : "STOPPED  ";
+                const char *tt_str = (tt > 16000) ? "CW [UP]  " : (tt < -16000) ? "CCW [DOWN]" : "STOPPED  ";
 
                 scr_printf("IIDX: [1:%c] [2:%c] [3:%c] [4:%c] [5:%c] [6:%c] [7:%c] [SEL:%c] [ST:%c] TT:%s\n",
                            (b1 & 0x01) ? '*' : '.',
