@@ -495,7 +495,11 @@ void requestDeviceDescriptor(IoRequest *req, u16 length)
 
 void hubPeekDeviceDescriptor(IoRequest *req)
 {
-    requestDeviceDescriptor(req, 8);
+    Endpoint *ep = req->correspEndpoint;
+    if ((ep->hcEd.maxPacketSize & 0x7FF) > 8)
+        requestDeviceDescriptor(req, sizeof(UsbDeviceDescriptor));
+    else
+        requestDeviceDescriptor(req, 8);
 
     // we've assigned a function address to the device and can reset the next device now, if there is one
     checkDelayedResets(req->correspEndpoint->correspDevice);
@@ -542,6 +546,54 @@ int hubTimedSetFuncAddress(Device *dev)
     return 0;
 }
 
+void hubPeekDesc0CB(IoRequest *req)
+{
+    Endpoint *ep              = req->correspEndpoint;
+    Device *dev               = ep->correspDevice;
+    UsbDeviceDescriptor *desc = (UsbDeviceDescriptor *)dev->staticDeviceDescPtr;
+
+    usbd_diag_log("HUB: d0 rc=%d len=%d", req->resultCode, req->transferedBytes);
+
+    if (req->resultCode == USB_RC_OK || req->resultCode == 9) {
+        if (desc->bLength >= 8 && desc->bDescriptorType == USB_DT_DEVICE) {
+            usbd_diag_log("HUB: P%d ep0 max=%d", dev->attachedToPortNo, desc->bMaxPacketSize0);
+            if (desc->bMaxPacketSize0 >= 8 && desc->bMaxPacketSize0 <= 64) {
+                ep->hcEd.maxPacketSize = (ep->hcEd.maxPacketSize & 0xF800) | desc->bMaxPacketSize0;
+            }
+        }
+    } else {
+        usbd_diag_log("HUB: d0 err %d", req->resultCode);
+    }
+
+    hubTimedSetFuncAddress(dev);
+}
+
+void hubPeekDesc0(Device *dev)
+{
+    Endpoint *ep = dev->endpointListStart;
+    if (!ep) {
+        usbd_diag_log("HUB: P%d no ep0", dev->attachedToPortNo);
+        return;
+    }
+
+    usbd_diag_log("HUB: P%d peek d0", dev->attachedToPortNo);
+    dev->staticDeviceDescEndPtr = dev->staticDeviceDescPtr;
+    doControlTransfer(ep, &dev->ioRequest,
+                      USB_DIR_IN | USB_RECIP_DEVICE, USB_REQ_GET_DESCRIPTOR, USB_DT_DEVICE << 8, 0, 8,
+                      dev->staticDeviceDescPtr, hubPeekDesc0CB);
+}
+
+void hubPortResetDone(Device *dev)
+{
+    Endpoint *ep = openDeviceEndpoint(dev, NULL, 0);
+    if (!ep) {
+        usbd_diag_log("HCD: P%d ep0 FAIL", dev->attachedToPortNo);
+        return;
+    }
+    usbd_diag_log("HUB: P%d rst done", dev->attachedToPortNo);
+    addTimerCallback(&dev->timer, (TimerCallback)hubPeekDesc0, dev, 20);
+}
+
 void hubGetPortStatusCallback(IoRequest *req)
 {
     UsbHub *dev = (UsbHub *)req->userCallbackArg;
@@ -582,10 +634,7 @@ void hubGetPortStatusCallback(IoRequest *req)
                             port->deviceStatus     = DEVICE_RESETCOMPLETE;
                             port->isLowSpeedDevice = (dev->portStatusChange >> PORT_LOW_SPEED) & 1;
 
-                            if (openDeviceEndpoint(port, NULL, 0))
-                                hubTimedSetFuncAddress(port);
-                            else
-                                dbg_printf("Can't open default control ep.\n");
+                            hubPortResetDone(port);
                             dev->hubStatusCounter = 0;
                         }
                     }

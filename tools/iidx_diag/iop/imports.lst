@@ -30,12 +30,14 @@ I_DelayThread
 I_GetThreadId
 thbase_IMPORTS_end
 
+#define I_sceUsbdGetDiagLog DECLARE_IMPORT(17, sceUsbdGetDiagLog)
 usbd_IMPORTS_start
 I_sceUsbdScanStaticDescriptor
 I_sceUsbdOpenPipe
 I_sceUsbdClosePipe
 I_sceUsbdTransferPipe
 I_sceUsbdRegisterLdd
+I_sceUsbdGetDiagLog
 usbd_IMPORTS_end
 
 sysclib_IMPORTS_start

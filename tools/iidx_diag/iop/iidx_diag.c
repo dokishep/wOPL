@@ -340,28 +340,7 @@ static int diag_disconnect(int devId)
     return 0;
 }
 
-extern void *QueryLibraryEntryTable(iop_library_t *lib);
-
-typedef int (*sceUsbdGetDiagLog_t)(char *dst, int max_len);
-static sceUsbdGetDiagLog_t p_sceUsbdGetDiagLog = NULL;
-
-static void init_usbd_diag_hook(void)
-{
-    iop_library_t lib;
-    struct irx_export_table *table;
-
-    if (p_sceUsbdGetDiagLog != NULL)
-        return;
-
-    memset(&lib, 0, sizeof(iop_library_t));
-    strncpy(lib.name, "usbd", 8);
-
-    table = (struct irx_export_table *)QueryLibraryEntryTable(&lib);
-    if (table != NULL) {
-        p_sceUsbdGetDiagLog = (sceUsbdGetDiagLog_t)table->fptrs[17];
-        add_log_entry("USBD hook: OK");
-    }
-}
+extern int sceUsbdGetDiagLog(char *dst, int max_len);
 
 static u32 last_port_status[2] = {0xFFFFFFFF, 0xFFFFFFFF};
 
@@ -395,12 +374,9 @@ static void diag_check_ohci(void)
         }
     }
 
-    if (!p_sceUsbdGetDiagLog)
-        init_usbd_diag_hook();
-
-    if (p_sceUsbdGetDiagLog) {
+    {
         char usbd_msg[48];
-        while (p_sceUsbdGetDiagLog(usbd_msg, sizeof(usbd_msg))) {
+        while (sceUsbdGetDiagLog(usbd_msg, sizeof(usbd_msg))) {
             add_log_entry(usbd_msg);
         }
     }

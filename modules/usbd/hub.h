@@ -14,6 +14,7 @@ void flushPort(Device *dev);
 int addTimerCallback(TimerCbStruct *arg, TimerCallback func, void *cbArg, u32 delay);
 void hubResetDevice(void *devp);
 int hubTimedSetFuncAddress(Device *dev);
+void hubPortResetDone(Device *dev);
 
 
 #endif // __HUB_H__

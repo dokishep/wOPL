@@ -224,13 +224,7 @@ void handleRhsc(void)
                     usbd_diag_log("HCD: P%d rst ok spd=%d", portNum + 1, (status >> PORT_LOW_SPEED) & 1);
                     port->deviceStatus     = DEVICE_RESETCOMPLETE;
                     port->isLowSpeedDevice = (status >> PORT_LOW_SPEED) & 1;
-                    Endpoint *ep           = openDeviceEndpoint(port, NULL, 0);
-                    if (ep) {
-                        usbd_diag_log("HCD: P%d ep0 ok pkt=%d", portNum + 1, ep->hcEd.maxPacketSize & 0x7FF);
-                        hubTimedSetFuncAddress(port);
-                    } else {
-                        usbd_diag_log("HCD: P%d ep0 FAIL", portNum + 1);
-                    }
+                    hubPortResetDone(port);
                 }
             }
         } else {
