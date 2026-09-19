@@ -166,7 +166,6 @@ int main(int argc, char *argv[])
     sleep(1);
 
     int log_frozen = 0;
-    int auto_saved = 0;
 
     while (1) {
         static iidx_diag_data_t diag;
@@ -176,12 +175,6 @@ int main(int argc, char *argv[])
             memset(rpc_buf, 0, sizeof(rpc_buf));
             SifCallRpc(&diag_client, IIDX_DIAG_CMD_GET_DATA, 0, NULL, 0, rpc_buf, sizeof(iidx_diag_data_t), NULL, NULL);
             memcpy(&diag, rpc_buf, sizeof(iidx_diag_data_t));
-
-            /* Auto-save to mc0 if events occurred and not yet saved */
-            if (!auto_saved && diag.change_count >= 3) {
-                save_log(&diag, "mc0:/iidx_diag.txt");
-                auto_saved = 1;
-            }
         }
 
         /* Read DualShock input for interactive controls */

@@ -416,7 +416,7 @@ void fetchConfigDescriptors(IoRequest *req)
     u16 readLen;
 
     usbd_diag_log("HUB: cfg rc=%d cnt=%d", req->resultCode, dev->fetchDescriptorCounter);
-    if ((req->resultCode == USB_RC_OK) || (dev->fetchDescriptorCounter == 0)) {
+    if ((req->resultCode == USB_RC_OK) || (req->resultCode == 9) || (dev->fetchDescriptorCounter == 0)) {
         int fetchDesc;
 
         u32 curDescNum = dev->fetchDescriptorCounter++;
@@ -462,7 +462,7 @@ void requestDevDescrptCb(IoRequest *req)
     UsbDeviceDescriptor *desc = dev->staticDeviceDescPtr;
 
     usbd_diag_log("HUB: dev rc=%d len=%d", req->resultCode, req->transferedBytes);
-    if (req->resultCode == USB_RC_OK) {
+    if (req->resultCode == USB_RC_OK || req->resultCode == 9) {
         usbd_diag_log("HUB: %04X:%04X ep0=%d", desc->idVendor, desc->idProduct, desc->bMaxPacketSize0);
         if (desc->bMaxPacketSize0 >= 8 && desc->bMaxPacketSize0 <= 64) {
             ep->hcEd.maxPacketSize = (ep->hcEd.maxPacketSize & 0xF800) | desc->bMaxPacketSize0;
@@ -509,12 +509,7 @@ void hubSetFuncAddressCB(IoRequest *req)
     Device *dev  = ep->correspDevice;
 
     usbd_diag_log("HUB: set FA cb rc=%d", req->resultCode);
-    if (req->resultCode == USB_RC_OK) {
-        ep->hcEd.hcArea |= dev->functionAddress & 0x7F;
-        dev->deviceStatus = DEVICE_READY;
-
-        addTimerCallback(&dev->timer, (TimerCallback)hubPeekDeviceDescriptor, req, 10);
-    } else if (req->resultCode == USB_RC_NORESPONSE) {
+    if (req->resultCode == USB_RC_NORESPONSE) {
         dbg_printf("device not responding\n");
         dev->functionDelay <<= 1;
         if (dev->functionDelay <= 0x500)
@@ -524,8 +519,10 @@ void hubSetFuncAddressCB(IoRequest *req)
             killDevice(dev, ep);
         }
     } else {
-        usbd_diag_log("HUB: set FA err %d -> kill", req->resultCode);
-        killDevice(dev, ep);
+        ep->hcEd.hcArea |= dev->functionAddress & 0x7F;
+        dev->deviceStatus = DEVICE_READY;
+
+        addTimerCallback(&dev->timer, (TimerCallback)hubPeekDeviceDescriptor, req, 10);
     }
 }
 
@@ -540,8 +537,8 @@ void hubSetFuncAddress(Endpoint *ep)
 
 int hubTimedSetFuncAddress(Device *dev)
 {
-    dev->functionDelay = 100;
-    addTimerCallback(&dev->timer, (TimerCallback)hubSetFuncAddress, dev->endpointListStart, 100);
+    dev->functionDelay = 20;
+    addTimerCallback(&dev->timer, (TimerCallback)hubSetFuncAddress, dev->endpointListStart, 20);
     return 0;
 }
 
