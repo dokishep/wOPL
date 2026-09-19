@@ -279,7 +279,7 @@ static void iidx_readReport(u8 *buf, int len, iidx_device *pad)
      * IIDX key 3            | Button 3  | CROSS
      * IIDX key 4            | Button 4  | R1
      * IIDX key 5            | Button 5  | CIRCLE
-     * IIDX key 6            | Button 6  | R2
+     * IIDX key 6            | Button 6  | L2
      * IIDX key 7            | Button 7  | LEFT
      * SELECT                | Button 8  | SELECT
      * START                 | Button 9/10| START
@@ -302,7 +302,7 @@ static void iidx_readReport(u8 *buf, int len, iidx_device *pad)
         buttons_state &= ~(1 << DS2BtnBit_Circle);
 
     if (hid_buttons & (1 << 5))
-        buttons_state &= ~(1 << DS2BtnBit_R2);
+        buttons_state &= ~(1 << DS2BtnBit_L2);
 
     if (hid_buttons & (1 << 6))
         buttons_state &= ~(1 << DS2BtnBit_Left);
@@ -348,13 +348,13 @@ static void iidx_readReport(u8 *buf, int len, iidx_device *pad)
     pad->ds2.PressureCross    = (hid_buttons & (1 << 2)) ? 255 : 0;
     pad->ds2.PressureR1       = (hid_buttons & (1 << 3)) ? 255 : 0;
     pad->ds2.PressureCircle   = (hid_buttons & (1 << 4)) ? 255 : 0;
-    pad->ds2.PressureR2       = (hid_buttons & (1 << 5)) ? 255 : 0;
+    pad->ds2.PressureL2       = (hid_buttons & (1 << 5)) ? 255 : 0;
     pad->ds2.PressureLeft     = (hid_buttons & (1 << 6)) ? 255 : 0;
     pad->ds2.PressureUp       = up ? 255 : 0;
     pad->ds2.PressureDown     = down ? 255 : 0;
     pad->ds2.PressureRight    = 0;
     pad->ds2.PressureTriangle = 0;
-    pad->ds2.PressureL2       = 0;
+    pad->ds2.PressureR2       = 0;
 }
 
 #ifndef USB_CLASS_HID
