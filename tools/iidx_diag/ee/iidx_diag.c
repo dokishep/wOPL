@@ -257,11 +257,6 @@ int main(int argc, char *argv[])
         if (!diag.connected) {
             int i;
             scr_printf("STATUS: [NO DEVICE CONNECTED]\n");
-            scr_printf(" * If Conn=NO: check USB cable or hold mode key on plug-in:\n");
-            scr_printf("   - Hold SELECT while plugging in -> Mode 2 (Digital TT)\n");
-            scr_printf("   - Hold VEFX while plugging in   -> Mode 3 (Analog TT)\n");
-            scr_printf("   - Hold START while plugging in  -> Mode 1 (Keyboard/Mouse)\n");
-            scr_printf(" * Controls: [[]] Reset Port 1 | (O) Reset Port 2 | /\\ Reset EP\n");
             scr_printf("--- IOP USB EVENT LOG (%d events) ---\n", (int)diag.change_count);
             for (i = 0; i < DIAG_LOG_ENTRIES; i++) {
                 int idx = (diag.log_head - 1 - i + DIAG_LOG_ENTRIES) % DIAG_LOG_ENTRIES;
@@ -269,9 +264,6 @@ int main(int argc, char *argv[])
                     scr_printf(" > %-60s\n", diag.recent_changes[idx]);
                 else
                     scr_printf("                                                                \n");
-            }
-            for (i = 0; i < 2; i++) {
-                scr_printf("                                                                \n");
             }
         } else {
             int i;

@@ -533,8 +533,8 @@ void hubSetFuncAddress(Endpoint *ep)
 
 int hubTimedSetFuncAddress(Device *dev)
 {
-    dev->functionDelay = 20;
-    addTimerCallback(&dev->timer, (TimerCallback)hubSetFuncAddress, dev->endpointListStart, 20);
+    dev->functionDelay = 100;
+    addTimerCallback(&dev->timer, (TimerCallback)hubSetFuncAddress, dev->endpointListStart, 100);
     return 0;
 }
 

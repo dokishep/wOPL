@@ -361,6 +361,14 @@ static void init_usbd_diag_hook(void)
         lib = lib->prev;
     }
     add_log_entry("USBD hook: NOT FOUND");
+
+    lib = GetLoadcoreInternalData()->let_next;
+    while (lib != NULL) {
+        char msg[48];
+        sprintf(msg, "Lib: %.8s", lib->name);
+        add_log_entry(msg);
+        lib = lib->prev;
+    }
 }
 
 static u32 last_port_status[2] = {0xFFFFFFFF, 0xFFFFFFFF};

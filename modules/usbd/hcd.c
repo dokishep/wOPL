@@ -216,11 +216,6 @@ void handleRhsc(void)
         u32 status                                = memPool.ohciRegs->HcRhPortStatus[portNum];
         memPool.ohciRegs->HcRhPortStatus[portNum] = C_PORT_FLAGS; // reset all flags
         if (status & BIT(PORT_CONNECTION)) {
-            if ((port->deviceStatus != DEVICE_NOTCONNECTED) && (port->deviceStatus != DEVICE_RESETPENDING) && (status & BIT(C_PORT_CONNECTION))) {
-                usbd_diag_log("HCD: P%d C_CONN bnc st=%08x", portNum + 1, status);
-                flushPort(port);
-            }
-
             if (port->deviceStatus == DEVICE_NOTCONNECTED) {
                 usbd_diag_log("HCD: P%d conn, 500ms rst", portNum + 1);
                 port->deviceStatus = DEVICE_CONNECTED;
