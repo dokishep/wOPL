@@ -57,6 +57,12 @@ jobs:
           echo "Building wOPL with PADEMU=1 and USE_IIDX=1..."
           make --trace clean release PADEMU=1 USE_IIDX=1
 
+      - name: Build IIDX Diagnostic Tool (iidx_diag.elf)
+        run: |
+          echo "Building IIDX Diagnostic Tool..."
+          make -C tools/iidx_diag clean all
+          cp tools/iidx_diag/ee/iidx_diag.elf ./iidx_diag.elf
+
       - name: Upload Release ELF Artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -65,6 +71,7 @@ jobs:
             WOPNPS2LD-*.ELF
             OPNPS2LD.ELF
             wopl.elf
+            iidx_diag.elf
           if-no-files-found: warn
 
       - name: Build Debug wOPL (if requested)

@@ -62,6 +62,8 @@ typedef struct _iidx_device
     u8 has_hat;
     u16 packet_size;
     volatile u8 transfer_active;
+    UsbEndpointDescriptor saved_ep;
+    u8 ep_found;
 
     /* Debug tracking (for rate-limiting log output to state changes) */
     u32 last_raw_buttons;

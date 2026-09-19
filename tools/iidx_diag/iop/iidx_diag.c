@@ -1,0 +1,410 @@
+#include "irx_imports.h"
+#include "../include/iidx_diag.h"
+
+#define MODNAME "iidx_diag"
+IRX_ID(MODNAME, 1, 1);
+
+#define REQ_USB_OUT (USB_DIR_OUT | USB_TYPE_CLASS | USB_RECIP_INTERFACE)
+#define USB_REQ_SET_IDLE 0x0A
+
+static int diag_probe(int devId);
+static int diag_connect(int devId);
+static int diag_disconnect(int devId);
+static void diag_config_set(int result, int count, void *arg);
+static void diag_data_cb(int resultCode, int bytes, void *arg);
+static void diag_submit_transfer(void);
+static void rpc_thread(void *data);
+
+static UsbDriver diag_driver = {
+    NULL, NULL, "iidx_diag", diag_probe, diag_connect, diag_disconnect
+};
+
+static iidx_diag_data_t diag_info;
+static int controlEndp = -1;
+static int interruptEndp = -1;
+static int transfer_active = 0;
+static u8 usb_buf[DIAG_PACKET_MAX + 32] __attribute__((aligned(64)));
+
+static SifRpcDataQueue_t rpc_que __attribute__((aligned(16)));
+static SifRpcServerData_t rpc_svr __attribute__((aligned(16)));
+static u8 rpc_buf[sizeof(iidx_diag_data_t) + 128] __attribute__((aligned(64)));
+
+static int diag_sema = -1;
+
+/* Store raw endpoint descriptors so we can re-open on EP switch */
+static UsbEndpointDescriptor saved_endpoints[DIAG_MAX_ENDPOINTS];
+
+static void add_log_entry(const char *msg)
+{
+    strncpy(diag_info.recent_changes[diag_info.log_head], msg, 47);
+    diag_info.recent_changes[diag_info.log_head][47] = '\0';
+    diag_info.log_head = (diag_info.log_head + 1) % DIAG_LOG_ENTRIES;
+}
+
+static int diag_probe(int devId)
+{
+    UsbDeviceDescriptor *device;
+
+    device = (UsbDeviceDescriptor *)sceUsbdScanStaticDescriptor(devId, NULL, USB_DT_DEVICE);
+    if (device == NULL)
+        return 0;
+
+    /* Ignore USB Hubs */
+    if (device->bDeviceClass == USB_CLASS_HUB)
+        return 0;
+
+    /* Ignore invalid vendor ID */
+    if (device->idVendor == 0x0000)
+        return 0;
+
+    printf(MODNAME ": probe claimed devId=%d VID=%04X PID=%04X class=%02X\n",
+           devId, device->idVendor, device->idProduct, device->bDeviceClass);
+
+    return 1;
+}
+
+static int diag_connect(int devId)
+{
+    UsbDeviceDescriptor *device;
+    UsbConfigDescriptor *config;
+    const u8 *p, *end;
+    int best_ep_idx = -1;
+
+    printf(MODNAME ": connect devId=%d\n", devId);
+
+    PollSema(diag_sema);
+
+    memset(&diag_info, 0, sizeof(diag_info));
+    diag_info.devId = devId;
+    diag_info.connected = 1;
+    controlEndp = -1;
+    interruptEndp = -1;
+    transfer_active = 0;
+
+    device = (UsbDeviceDescriptor *)sceUsbdScanStaticDescriptor(devId, NULL, USB_DT_DEVICE);
+    if (device == NULL) {
+        printf(MODNAME ": failed to get device descriptor\n");
+        SignalSema(diag_sema);
+        return 1;
+    }
+
+    diag_info.idVendor = device->idVendor;
+    diag_info.idProduct = device->idProduct;
+    diag_info.bcdDevice = device->bcdDevice;
+    diag_info.bDeviceClass = device->bDeviceClass;
+    diag_info.bDeviceSubClass = device->bDeviceSubClass;
+    diag_info.bDeviceProtocol = device->bDeviceProtocol;
+    diag_info.bMaxPacketSize0 = device->bMaxPacketSize0;
+    diag_info.bNumConfigurations = device->bNumConfigurations;
+
+    controlEndp = sceUsbdOpenPipe(devId, NULL);
+
+    config = (UsbConfigDescriptor *)sceUsbdScanStaticDescriptor(devId, device, USB_DT_CONFIG);
+    if (config == NULL)
+        config = (UsbConfigDescriptor *)sceUsbdScanStaticDescriptor(devId, NULL, USB_DT_CONFIG);
+
+    if (config != NULL && config->wTotalLength >= sizeof(UsbConfigDescriptor)) {
+        diag_info.bNumInterfaces = config->bNumInterfaces;
+        p = (const u8 *)config;
+        end = p + config->wTotalLength;
+
+        while (p + 2 <= end) {
+            u8 len = p[0];
+            u8 type = p[1];
+            if (len < 2 || p + len > end)
+                break;
+
+            if (type == USB_DT_INTERFACE && len >= sizeof(UsbInterfaceDescriptor)) {
+                UsbInterfaceDescriptor *intf = (UsbInterfaceDescriptor *)p;
+                diag_info.bInterfaceNumber = intf->bInterfaceNumber;
+                diag_info.bInterfaceClass = intf->bInterfaceClass;
+                diag_info.bInterfaceSubClass = intf->bInterfaceSubClass;
+                diag_info.bInterfaceProtocol = intf->bInterfaceProtocol;
+            } else if (type == USB_DT_ENDPOINT && len >= sizeof(UsbEndpointDescriptor)) {
+                if (diag_info.num_endpoints < DIAG_MAX_ENDPOINTS) {
+                    UsbEndpointDescriptor *ep = (UsbEndpointDescriptor *)p;
+                    int idx = diag_info.num_endpoints;
+                    u16 pkt = (ep->wMaxPacketSizeHB << 8) | ep->wMaxPacketSizeLB;
+
+                    diag_info.endpoints[idx].bEndpointAddress = ep->bEndpointAddress;
+                    diag_info.endpoints[idx].bmAttributes = ep->bmAttributes;
+                    diag_info.endpoints[idx].wMaxPacketSize = pkt;
+                    diag_info.endpoints[idx].bInterval = ep->bInterval;
+
+                    memcpy(&saved_endpoints[idx], ep, sizeof(UsbEndpointDescriptor));
+                    diag_info.num_endpoints++;
+
+                    /* Look for first Interrupt IN endpoint */
+                    if (best_ep_idx < 0 &&
+                        (ep->bmAttributes & 0x03) == USB_ENDPOINT_XFER_INT &&
+                        (ep->bEndpointAddress & USB_ENDPOINT_DIR_MASK) == USB_DIR_IN) {
+                        best_ep_idx = idx;
+                    }
+                }
+            }
+            p += len;
+        }
+    }
+
+    /* Fallback: If no interrupt IN endpoint found, check for bulk IN endpoint */
+    if (best_ep_idx < 0) {
+        int i;
+        for (i = 0; i < diag_info.num_endpoints; i++) {
+            if ((diag_info.endpoints[i].bEndpointAddress & USB_ENDPOINT_DIR_MASK) == USB_DIR_IN) {
+                best_ep_idx = i;
+                break;
+            }
+        }
+    }
+
+    if (best_ep_idx >= 0) {
+        diag_info.active_ep_idx = best_ep_idx;
+        diag_info.active_ep_addr = diag_info.endpoints[best_ep_idx].bEndpointAddress;
+        diag_info.active_ep_size = diag_info.endpoints[best_ep_idx].wMaxPacketSize;
+        if (diag_info.active_ep_size == 0 || diag_info.active_ep_size > DIAG_PACKET_MAX)
+            diag_info.active_ep_size = DIAG_PACKET_MAX;
+    } else {
+        diag_info.active_ep_idx = -1;
+    }
+
+    add_log_entry("Device attached");
+
+    /* Set device configuration. Endpoint pipe will be opened in callback. */
+    if (config != NULL) {
+        sceUsbdSetConfiguration(controlEndp, config->bConfigurationValue, diag_config_set, (void *)(long)devId);
+    } else {
+        sceUsbdSetConfiguration(controlEndp, 1, diag_config_set, (void *)(long)devId);
+    }
+
+    SignalSema(diag_sema);
+    return 0;
+}
+
+static void diag_config_set(int result, int count, void *arg)
+{
+    int devId = (int)(long)arg;
+
+    PollSema(diag_sema);
+
+    printf(MODNAME ": config_set result=%d\n", result);
+
+    if (result == USB_RC_OK) {
+        diag_info.configured = 1;
+        add_log_entry("Config set OK");
+
+        /* Open active endpoint pipe */
+        if (diag_info.active_ep_idx >= 0) {
+            interruptEndp = sceUsbdOpenPipe(devId, &saved_endpoints[diag_info.active_ep_idx]);
+            printf(MODNAME ": opened ep pipe id=%d addr=%02X\n",
+                   interruptEndp, diag_info.active_ep_addr);
+
+            /* Send SET_IDLE 0 to ensure continuous reporting */
+            sceUsbdControlTransfer(controlEndp, REQ_USB_OUT, USB_REQ_SET_IDLE, 0, 0, 0, NULL, NULL, NULL);
+
+            /* Start transfer loop */
+            diag_submit_transfer();
+        } else {
+            add_log_entry("No IN endpoint found!");
+        }
+    } else {
+        add_log_entry("Config set FAILED");
+    }
+
+    SignalSema(diag_sema);
+}
+
+static void diag_submit_transfer(void)
+{
+    int ret;
+
+    if (!diag_info.connected || interruptEndp < 0 || transfer_active)
+        return;
+
+    transfer_active = 1;
+    ret = sceUsbdInterruptTransfer(interruptEndp,
+                                   usb_buf,
+                                   diag_info.active_ep_size ? diag_info.active_ep_size : DIAG_PACKET_MAX,
+                                   diag_data_cb,
+                                   NULL);
+    if (ret != USB_RC_OK) {
+        transfer_active = 0;
+        diag_info.last_result = ret;
+    }
+}
+
+static void diag_data_cb(int resultCode, int bytes, void *arg)
+{
+    int i;
+    (void)arg;
+
+    transfer_active = 0;
+    diag_info.last_result = resultCode;
+    diag_info.last_bytes = bytes;
+
+    if (resultCode == USB_RC_OK && bytes > 0) {
+        int changed = 0;
+        if (bytes > DIAG_PACKET_MAX)
+            bytes = DIAG_PACKET_MAX;
+
+        diag_info.total_packets++;
+
+        if (diag_info.total_packets == 1) {
+            /* First packet: initialize baseline */
+            memcpy(diag_info.current_packet, usb_buf, bytes);
+            memcpy(diag_info.prev_packet, usb_buf, bytes);
+            memset(diag_info.diff_mask, 0, sizeof(diag_info.diff_mask));
+            add_log_entry("First packet received!");
+        } else {
+            for (i = 0; i < bytes; i++) {
+                if (usb_buf[i] != diag_info.current_packet[i]) {
+                    char msg[48];
+                    diag_info.diff_mask[i] = 1;
+                    changed = 1;
+
+                    snprintf(msg, sizeof(msg), "[#%d] B%02d: %02X->%02X",
+                             (int)(diag_info.change_count + 1), i,
+                             diag_info.current_packet[i], usb_buf[i]);
+                    add_log_entry(msg);
+                } else {
+                    diag_info.diff_mask[i] = 0;
+                }
+            }
+
+            if (changed) {
+                diag_info.change_count++;
+                memcpy(diag_info.prev_packet, diag_info.current_packet, bytes);
+                memcpy(diag_info.current_packet, usb_buf, bytes);
+            }
+        }
+    }
+
+    /* Re-submit transfer */
+    if (diag_info.connected && interruptEndp >= 0) {
+        diag_submit_transfer();
+    }
+}
+
+static int diag_disconnect(int devId)
+{
+    printf(MODNAME ": disconnect devId=%d\n", devId);
+
+    PollSema(diag_sema);
+
+    if (interruptEndp >= 0) {
+        sceUsbdClosePipe(interruptEndp);
+        interruptEndp = -1;
+    }
+    if (controlEndp >= 0) {
+        sceUsbdClosePipe(controlEndp);
+        controlEndp = -1;
+    }
+
+    transfer_active = 0;
+    diag_info.connected = 0;
+    diag_info.configured = 0;
+    add_log_entry("Device disconnected");
+
+    SignalSema(diag_sema);
+    return 0;
+}
+
+static void *rpc_sf(int cmd, void *data, int size)
+{
+    switch (cmd) {
+        case IIDX_DIAG_CMD_GET_DATA:
+            PollSema(diag_sema);
+            memcpy(data, &diag_info, sizeof(iidx_diag_data_t));
+            SignalSema(diag_sema);
+            break;
+
+        case IIDX_DIAG_CMD_SELECT_EP: {
+            int ep_idx = *(int *)data;
+            PollSema(diag_sema);
+            if (ep_idx >= 0 && ep_idx < diag_info.num_endpoints && diag_info.connected) {
+                if (interruptEndp >= 0) {
+                    sceUsbdClosePipe(interruptEndp);
+                    interruptEndp = -1;
+                }
+                transfer_active = 0;
+                diag_info.active_ep_idx = ep_idx;
+                diag_info.active_ep_addr = diag_info.endpoints[ep_idx].bEndpointAddress;
+                diag_info.active_ep_size = diag_info.endpoints[ep_idx].wMaxPacketSize;
+                if (diag_info.active_ep_size == 0 || diag_info.active_ep_size > DIAG_PACKET_MAX)
+                    diag_info.active_ep_size = DIAG_PACKET_MAX;
+
+                interruptEndp = sceUsbdOpenPipe(diag_info.devId, &saved_endpoints[ep_idx]);
+                diag_submit_transfer();
+                add_log_entry("Switched endpoint");
+            }
+            SignalSema(diag_sema);
+            break;
+        }
+
+        case IIDX_DIAG_CMD_RESET:
+            PollSema(diag_sema);
+            if (interruptEndp >= 0) {
+                sceUsbdClosePipe(interruptEndp);
+                interruptEndp = -1;
+            }
+            transfer_active = 0;
+            if (diag_info.connected && diag_info.active_ep_idx >= 0) {
+                interruptEndp = sceUsbdOpenPipe(diag_info.devId, &saved_endpoints[diag_info.active_ep_idx]);
+                diag_submit_transfer();
+                add_log_entry("Reset & re-opened EP");
+            }
+            SignalSema(diag_sema);
+            break;
+
+        default:
+            break;
+    }
+
+    return data;
+}
+
+static void rpc_thread(void *data)
+{
+    (void)data;
+    sceSifInitRpc(0);
+    sceSifSetRpcQueue(&rpc_que, GetThreadId());
+    sceSifRegisterRpc(&rpc_svr, IIDX_DIAG_RPC_ID, rpc_sf, rpc_buf, NULL, NULL, &rpc_que);
+    sceSifRpcLoop(&rpc_que);
+}
+
+int _start(int argc, char *argv[])
+{
+    iop_thread_t th;
+    int thid;
+    (void)argc;
+    (void)argv;
+
+    printf(MODNAME ": starting diagnostic driver\n");
+
+    diag_sema = CreateMutex(IOP_MUTEX_UNLOCKED);
+    if (diag_sema < 0) {
+        printf(MODNAME ": failed to create mutex\n");
+        return MODULE_NO_RESIDENT_END;
+    }
+
+    memset(&diag_info, 0, sizeof(diag_info));
+    add_log_entry("Diagnostic driver started");
+
+    if (sceUsbdRegisterLdd(&diag_driver) != USB_RC_OK) {
+        printf(MODNAME ": failed to register USBD driver\n");
+        return MODULE_NO_RESIDENT_END;
+    }
+
+    th.attr = TH_C;
+    th.thread = rpc_thread;
+    th.priority = 40;
+    th.stacksize = 0x1000;
+    th.option = 0;
+
+    thid = CreateThread(&th);
+    if (thid > 0) {
+        StartThread(thid, NULL);
+        return MODULE_RESIDENT_END;
+    }
+
+    return MODULE_NO_RESIDENT_END;
+}

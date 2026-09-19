@@ -443,30 +443,8 @@ static int iidxhid_connect(int devId)
         config = (UsbConfigDescriptor *)sceUsbdScanStaticDescriptor(devId, NULL, USB_DT_CONFIG);
     }
 
-    /* Method 1: Scan endpoints using FreeUsbd's static descriptor scanner (as in ds34usb.c) */
-    endpoint = (UsbEndpointDescriptor *)sceUsbdScanStaticDescriptor(devId, NULL, USB_DT_ENDPOINT);
-    if (endpoint != NULL) {
-        int epLimit = 32;
-        while (endpoint != NULL && epLimit-- > 0) {
-            if (endpoint->bLength < sizeof(UsbEndpointDescriptor))
-                break;
-            if ((endpoint->bmAttributes & 0x03) == USB_ENDPOINT_XFER_INT &&
-                (endpoint->bEndpointAddress & USB_ENDPOINT_DIR_MASK) == USB_DIR_IN) {
-                u16 pkt = (endpoint->wMaxPacketSizeHB << 8) | endpoint->wMaxPacketSizeLB;
-                if (pkt == 0 || pkt > 64)
-                    pkt = 64;
-                iidx_pad[pad].packet_size = pkt;
-                iidx_pad[pad].interruptEndp = sceUsbdOpenPipe(devId, endpoint);
-                DPRINTF("Method 1: Registered interrupt IN endpoint id=%d addr=%02X pktSize=%u\n",
-                        iidx_pad[pad].interruptEndp, endpoint->bEndpointAddress, pkt);
-                break;
-            }
-            endpoint = (UsbEndpointDescriptor *)((char *)endpoint + endpoint->bLength);
-        }
-    }
-
-    /* Method 2: If Method 1 did not find it, scan configuration descriptor buffer */
-    if (iidx_pad[pad].interruptEndp < 0 && config != NULL && config->wTotalLength >= sizeof(UsbConfigDescriptor)) {
+    /* Scan configuration descriptor buffer for Interrupt IN endpoint */
+    if (config != NULL && config->wTotalLength >= sizeof(UsbConfigDescriptor)) {
         const u8 *p = (const u8 *)config;
         const u8 *end = p + config->wTotalLength;
         int cur_intf = 0;
@@ -489,9 +467,10 @@ static int iidxhid_connect(int devId)
                         pkt = 64;
                     iidx_pad[pad].packet_size = pkt;
                     iidx_pad[pad].interfaceNumber = cur_intf;
-                    iidx_pad[pad].interruptEndp = sceUsbdOpenPipe(devId, ep);
-                    DPRINTF("Method 2: Registered interrupt IN endpoint id=%d addr=%02X pktSize=%u\n",
-                            iidx_pad[pad].interruptEndp, ep->bEndpointAddress, pkt);
+                    memcpy(&iidx_pad[pad].saved_ep, ep, sizeof(UsbEndpointDescriptor));
+                    iidx_pad[pad].ep_found = 1;
+                    DPRINTF("Found interrupt IN endpoint addr=%02X pktSize=%u\n",
+                            ep->bEndpointAddress, pkt);
                     break;
                 }
             }
@@ -500,13 +479,27 @@ static int iidxhid_connect(int devId)
         }
     }
 
-    if (iidx_pad[pad].interruptEndp < 0) {
-        DPRINTF("connect: failed to open interrupt endpoint!\n");
+    /* Fallback: Scan using FreeUsbd static descriptor scanner if not found in config buffer */
+    if (!iidx_pad[pad].ep_found) {
+        endpoint = (UsbEndpointDescriptor *)sceUsbdScanStaticDescriptor(devId, NULL, USB_DT_ENDPOINT);
+        if (endpoint != NULL && (endpoint->bmAttributes & 0x03) == USB_ENDPOINT_XFER_INT &&
+            (endpoint->bEndpointAddress & USB_ENDPOINT_DIR_MASK) == USB_DIR_IN) {
+            u16 pkt = (endpoint->wMaxPacketSizeHB << 8) | endpoint->wMaxPacketSizeLB;
+            if (pkt == 0 || pkt > 64)
+                pkt = 64;
+            iidx_pad[pad].packet_size = pkt;
+            memcpy(&iidx_pad[pad].saved_ep, endpoint, sizeof(UsbEndpointDescriptor));
+            iidx_pad[pad].ep_found = 1;
+        }
+    }
+
+    if (!iidx_pad[pad].ep_found) {
+        DPRINTF("connect: failed to find interrupt endpoint!\n");
         iidx_release(pad);
         return 1;
     }
 
-    iidx_pad[pad].status |= (IIDXHID_STATE_CONNECTED | IIDXHID_STATE_RUNNING);
+    iidx_pad[pad].status |= IIDXHID_STATE_CONNECTED;
 
     /* Initialize controller state immediately so pad is fully valid when SIO2 queries */
     iidx_pad[pad].ds2.nButtonState = 0xFFFF;
@@ -534,26 +527,36 @@ static void iidx_config_set(int result, int count, void *arg)
 
     PollSema(iidx_pad[pad].sema);
 
-    iidx_pad[pad].status |= (IIDXHID_STATE_CONFIGURED | IIDXHID_STATE_RUNNING);
+    if (result == USB_RC_OK && iidx_pad[pad].ep_found) {
+        iidx_pad[pad].status |= (IIDXHID_STATE_CONFIGURED | IIDXHID_STATE_RUNNING);
 
-    /* Ensure pad is connected to PADEMU */
-    pademu_connect(&padf[pad]);
+        /* Open interrupt endpoint after configuration is successfully applied */
+        iidx_pad[pad].interruptEndp = sceUsbdOpenPipe(iidx_pad[pad].devId, &iidx_pad[pad].saved_ep);
 
-    SignalSema(iidx_pad[pad].sema);
+        /* Send HID SET_IDLE (0 = report on change / continuous) */
+        sceUsbdControlTransfer(iidx_pad[pad].controlEndp, REQ_USB_OUT, 0x0A /* SET_IDLE */, 0, 0, 0, NULL, NULL, NULL);
 
-    /* Start asynchronous interrupt polling loop */
-    if (iidx_pad[pad].interruptEndp >= 0 && !iidx_pad[pad].transfer_active) {
-        int ret;
-        iidx_pad[pad].transfer_active = 1;
-        ret = sceUsbdInterruptTransfer(iidx_pad[pad].interruptEndp,
-                                       iidx_pad[pad].usb_buf,
-                                       iidx_pad[pad].packet_size ? iidx_pad[pad].packet_size : 64,
-                                       usb_data_cb,
-                                       (void *)(long)pad);
-        if (ret != USB_RC_OK) {
-            iidx_pad[pad].transfer_active = 0;
-            DPRINTF("Initial interrupt transfer error: %d\n", ret);
+        /* Ensure pad is connected to PADEMU */
+        pademu_connect(&padf[pad]);
+
+        SignalSema(iidx_pad[pad].sema);
+
+        /* Start asynchronous interrupt polling loop */
+        if (iidx_pad[pad].interruptEndp >= 0 && !iidx_pad[pad].transfer_active) {
+            int ret;
+            iidx_pad[pad].transfer_active = 1;
+            ret = sceUsbdInterruptTransfer(iidx_pad[pad].interruptEndp,
+                                           iidx_pad[pad].usb_buf,
+                                           iidx_pad[pad].packet_size ? iidx_pad[pad].packet_size : 64,
+                                           usb_data_cb,
+                                           (void *)(long)pad);
+            if (ret != USB_RC_OK) {
+                iidx_pad[pad].transfer_active = 0;
+                DPRINTF("Initial interrupt transfer error: %d\n", ret);
+            }
         }
+    } else {
+        SignalSema(iidx_pad[pad].sema);
     }
 }
 
@@ -590,6 +593,7 @@ static void iidx_release(int pad)
     iidx_pad[pad].controlEndp = -1;
     iidx_pad[pad].devId = -1;
     iidx_pad[pad].layout_detected = 0;
+    iidx_pad[pad].ep_found = 0;
     iidx_pad[pad].tt_up = 0;
     iidx_pad[pad].tt_down = 0;
 
