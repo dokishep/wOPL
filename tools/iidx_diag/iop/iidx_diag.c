@@ -125,8 +125,6 @@ static int diag_connect(int devId)
     int cur_intf_num = 0;
     int cur_intf_class = 0;
 
-    UsbEndpointDescriptor *best_ep_desc = NULL;
-
     if (config != NULL && config->wTotalLength >= sizeof(UsbConfigDescriptor)) {
         diag_info.bNumInterfaces = config->bNumInterfaces;
         p = (const u8 *)config;
@@ -168,7 +166,6 @@ static int diag_connect(int devId)
                             best_ep_idx = idx;
                             best_ep_score = score;
                             active_intf_num = cur_intf_num;
-                            best_ep_desc = ep;
                         }
                     }
                 }
@@ -243,7 +240,6 @@ static void diag_config_set(int result, int count, void *arg)
         char msg[48];
         sprintf(msg, "Config set FAIL (rc=%d)", result);
         add_log_entry(msg);
-    }
     }
 
     SignalSema(diag_sema);
