@@ -52,6 +52,13 @@ jobs:
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
+      - name: Build Fixed USBD IRX
+        run: |
+          echo "Compiling fixed USBD driver with Full-Speed EP0 & Descriptor size fix..."
+          make -C modules/usbd clean all
+          cp modules/usbd/usbd.irx modules/usb-vendor/usbd_mini.irx
+          cp modules/usbd/usbd.irx modules/usb-vendor/usbd.irx
+
       - name: Build wOPL Release (PADEMU + IIDX HID)
         run: |
           echo "Building wOPL with PADEMU=1 and USE_IIDX=1..."
