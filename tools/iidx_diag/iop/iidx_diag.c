@@ -261,9 +261,9 @@ static void diag_data_cb(int resultCode, int bytes, void *arg)
                     diag_info.diff_mask[i] = 1;
                     changed = 1;
 
-                    snprintf(msg, sizeof(msg), "[#%d] B%02d: %02X->%02X",
-                             (int)(diag_info.change_count + 1), i,
-                             diag_info.current_packet[i], usb_buf[i]);
+                    sprintf(msg, "[#%d] B%02d: %02X->%02X",
+                            (int)(diag_info.change_count + 1), i,
+                            diag_info.current_packet[i], usb_buf[i]);
                     add_log_entry(msg);
                 } else {
                     diag_info.diff_mask[i] = 0;
