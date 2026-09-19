@@ -217,29 +217,6 @@ static void iidx_readReport(u8 *buf, int len, iidx_device *pad)
         }
     }
 
-    /*
-     * Dynamic button fail-safe:
-     * If hid_buttons is 0 (no buttons registered at current btn_byte_offset),
-     * check if any candidate offset in buf[] has buttons pressed!
-     * Candidate offsets: 0, 1, 2, 4, 5, 12, 13
-     */
-    if (hid_buttons == 0) {
-        static const u8 candidates[] = {0, 1, 2, 4, 5, 12, 13};
-        int c;
-        for (c = 0; c < (int)(sizeof(candidates)/sizeof(candidates[0])); c++) {
-            int off = candidates[c];
-            if (off + 1 < len && off != pad->x_byte_offset && (!pad->has_hat || off != pad->hat_byte_offset)) {
-                u16 val = (u16)(buf[off] | (buf[off + 1] << 8));
-                /* Exclude analog resting values (e.g. 0x8080 or ~32768) */
-                if (val != 0 && (val & 0xFF) != 0x80 && (val & 0xFF) != 0x7F) {
-                    hid_buttons = (u32)val;
-                    pad->btn_byte_offset = off;
-                    DPRINTF("Dynamic button fail-safe: locked to offset %d\n", off);
-                    break;
-                }
-            }
-        }
-    }
 
     /* Read turntable axis */
     if (pad->turntable_is_16bit) {
@@ -268,8 +245,10 @@ static void iidx_readReport(u8 *buf, int len, iidx_device *pad)
     }
 
     /* Also check dedicated Scratch UP/DOWN buttons (buttons 11 & 12 / bits 10 & 11) */
-    if (hid_buttons & (1 << 10)) up = 1;
-    if (hid_buttons & (1 << 11)) down = 1;
+    if (!pad->is_yuancon_report6) {
+        if (hid_buttons & (1 << 10)) up = 1;
+        if (hid_buttons & (1 << 11)) down = 1;
+    }
 
     /* Rate-limited debug: only log on state transitions */
     if (hid_buttons != pad->last_raw_buttons || up != pad->last_debug_up || down != pad->last_debug_down) {
