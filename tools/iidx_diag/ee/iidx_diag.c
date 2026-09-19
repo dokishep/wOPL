@@ -229,9 +229,7 @@ int main(int argc, char *argv[])
         /* Render Dashboard */
         scr_setXY(0, 0);
 
-        scr_printf("================================================================\n");
-        scr_printf("       PS2 USB IIDX CONTROLLER HARDWARE DIAGNOSTIC v1.1\n");
-        scr_printf("================================================================\n");
+        scr_printf("=== PS2 USB IIDX CONTROLLER HARDWARE DIAGNOSTIC v1.1 ===\n");
 
         /* Hardware Root Hub Status (Always visible) */
         {
@@ -258,7 +256,7 @@ int main(int argc, char *argv[])
             int i;
             scr_printf("STATUS: [NO DEVICE CONNECTED]\n");
             scr_printf("--- IOP USB EVENT LOG (%d events) ---\n", (int)diag.change_count);
-            for (i = 0; i < DIAG_LOG_ENTRIES; i++) {
+            for (i = 0; i < 8; i++) {
                 int idx = (diag.log_head - 1 - i + DIAG_LOG_ENTRIES) % DIAG_LOG_ENTRIES;
                 if (diag.recent_changes[idx][0] != '\0')
                     scr_printf(" > %-60s\n", diag.recent_changes[idx]);
@@ -275,39 +273,14 @@ int main(int argc, char *argv[])
                        diag.bDeviceClass, diag.bDeviceSubClass, diag.bDeviceProtocol,
                        diag.bInterfaceNumber, diag.bInterfaceClass);
 
-            scr_printf("\n--- ENDPOINTS (%d found) ---\n", diag.num_endpoints);
-            for (i = 0; i < diag.num_endpoints && i < 4; i++) {
-                char is_in = (diag.endpoints[i].bEndpointAddress & 0x80) ? 'I' : 'O';
-                char is_active = (i == diag.active_ep_idx) ? '*' : ' ';
-                const char *type_str = "CTRL";
-                switch (diag.endpoints[i].bmAttributes & 3) {
-                    case 1: type_str = "ISOC"; break;
-                    case 2: type_str = "BULK"; break;
-                    case 3: type_str = "INT "; break;
-                }
-                scr_printf(" [%c] EP 0x%02X (%cN) Type:%s Pkt:%2d Int:%2dms%s\n",
-                           is_active,
-                           diag.endpoints[i].bEndpointAddress,
-                           is_in,
-                           type_str,
-                           diag.endpoints[i].wMaxPacketSize,
-                           diag.endpoints[i].bInterval,
-                           (i == diag.active_ep_idx) ? " <-- ACTIVE" : "           ");
-            }
-            for (; i < 4; i++) {
-                scr_printf("                                                                \n");
-            }
-
-            scr_printf("\n--- TELEMETRY ---\n");
-            scr_printf("Packets: %-8u  Rate: %3u/s  Changes: %-6u  RC: %d (%s) \n",
+            scr_printf("EP 0x%02X Pkt:%2d | Pkts:%-6u Rate:%3u/s Chgs:%-5u RC:%d (%s)\n",
+                       diag.active_ep_addr, diag.active_ep_size,
                        (unsigned int)diag.total_packets,
                        (unsigned int)pkt_rate,
                        (unsigned int)diag.change_count,
                        diag.last_result,
                        usb_rc_str(diag.last_result));
-            scr_printf("Last Packet Size: %2d bytes\n", diag.last_bytes);
 
-            scr_printf("\n--- RAW PACKET (HEX) ---\n");
             scr_printf("00: ");
             for (i = 0; i < 16; i++) {
                 if (i < diag.last_bytes)
@@ -324,26 +297,16 @@ int main(int argc, char *argv[])
             }
             scr_printf("\n");
 
-            scr_printf("\n--- BITFIELD (First 4 Bytes) ---\n");
             scr_printf("B0: "); print_bits(diag.current_packet[0]);
             scr_printf("  B1: "); print_bits(diag.current_packet[1]);
             scr_printf("\nB2: "); print_bits(diag.current_packet[2]);
             scr_printf("  B3: "); print_bits(diag.current_packet[3]);
             scr_printf("\n");
-
-            scr_printf("\n--- RECENT ACTIVITY ---\n");
-            for (i = 0; i < 3; i++) {
-                int idx = (diag.log_head - 1 - i + DIAG_LOG_ENTRIES) % DIAG_LOG_ENTRIES;
-                if (diag.recent_changes[idx][0] != '\0')
-                    scr_printf(" > %-40s\n", diag.recent_changes[idx]);
-                else
-                    scr_printf("                                                 \n");
-            }
         }
 
-        scr_printf("\n================================================================\n");
+        scr_printf("----------------------------------------------------------------\n");
         scr_printf("%-64s\n", status_msg);
-        scr_printf("[START] Save mc0:/mass: | [L1/R1] Switch EP | [/\\ ] Reset\n");
+        scr_printf("[START] Save mc0:/mass: | [[]]/(O) Reset P1/P2 | [/\\ ] Reset\n");
         scr_printf("================================================================\n");
 
         /* ~60 FPS delay */
