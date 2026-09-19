@@ -346,35 +346,21 @@ static int diag_disconnect(int devId)
 typedef int (*sceUsbdGetDiagLog_t)(char *dst, int max_len);
 static sceUsbdGetDiagLog_t p_sceUsbdGetDiagLog = NULL;
 
-static void *get_export_table(const char *name, int version)
-{
-    iop_library_t lib;
-    int i;
-    const char *p;
-
-    memset(&lib, 0, sizeof(lib));
-    lib.version = version;
-    for (i = 0, p = name; (i < 8) && (*p); i++, p++)
-        lib.name[i] = *p;
-
-    return QueryLibraryEntryTable(&lib);
-}
-
 static void init_usbd_diag_hook(void)
 {
-    void *table = get_export_table("usbd", 0x101);
-    if (!table)
-        table = get_export_table("usbd", 0);
-    if (table) {
-        void **exp = (void **)table;
-        int size = 0;
-        while (exp[size] != NULL)
-            size++;
-        /* In modules/usbd/exports.tab, sceUsbdGetDiagLog is entry 17 */
-        if (size > 17) {
+    iop_library_t *lib;
+
+    lib = GetLoadcoreInternalData()->let_next;
+    while (lib != NULL) {
+        if (strncmp(lib->name, "usbd", 4) == 0) {
+            void **exp = (void **)((u32)lib + 0x14);
             p_sceUsbdGetDiagLog = (sceUsbdGetDiagLog_t)exp[17];
+            add_log_entry("USBD hook: OK");
+            return;
         }
+        lib = lib->prev;
     }
+    add_log_entry("USBD hook: NOT FOUND");
 }
 
 static u32 last_port_status[2] = {0xFFFFFFFF, 0xFFFFFFFF};
@@ -396,15 +382,15 @@ static void diag_check_ohci(void)
             if (last_port_status[p] == 0xFFFFFFFF) {
                 sprintf(msg, "P%d init: %08X [C=%d E=%d]",
                         p + 1, (unsigned int)cur, (int)(cur & 1), (int)((cur >> 1) & 1));
-            } else {
-                sprintf(msg, "P%d chg: %08X [C=%d E=%d R=%d OC=%d]",
+                add_log_entry(msg);
+            } else if ((cur & 3) != (last_port_status[p] & 3)) {
+                /* Only log if Connection (bit 0) or Enable (bit 1) changed! */
+                sprintf(msg, "P%d chg: %08X [C=%d E=%d]",
                         p + 1, (unsigned int)cur,
                         (int)(cur & 1),
-                        (int)((cur >> 1) & 1),
-                        (int)((cur >> 4) & 1),
-                        (int)((cur >> 3) & 1));
+                        (int)((cur >> 1) & 1));
+                add_log_entry(msg);
             }
-            add_log_entry(msg);
             last_port_status[p] = cur;
         }
     }

@@ -488,7 +488,7 @@ void requestDeviceDescriptor(IoRequest *req, u16 length)
 
 void hubPeekDeviceDescriptor(IoRequest *req)
 {
-    requestDeviceDescriptor(req, sizeof(UsbDeviceDescriptor));
+    requestDeviceDescriptor(req, 8);
 
     // we've assigned a function address to the device and can reset the next device now, if there is one
     checkDelayedResets(req->correspEndpoint->correspDevice);
@@ -502,7 +502,12 @@ void hubSetFuncAddressCB(IoRequest *req)
     Device *dev  = ep->correspDevice;
 
     usbd_diag_log("HUB: set FA cb rc=%d", req->resultCode);
-    if (req->resultCode == USB_RC_NORESPONSE) {
+    if (req->resultCode == USB_RC_OK) {
+        ep->hcEd.hcArea |= dev->functionAddress & 0x7F;
+        dev->deviceStatus = DEVICE_READY;
+
+        addTimerCallback(&dev->timer, (TimerCallback)hubPeekDeviceDescriptor, req, 10);
+    } else if (req->resultCode == USB_RC_NORESPONSE) {
         dbg_printf("device not responding\n");
         dev->functionDelay <<= 1;
         if (dev->functionDelay <= 0x500)
@@ -512,10 +517,8 @@ void hubSetFuncAddressCB(IoRequest *req)
             killDevice(dev, ep);
         }
     } else {
-        ep->hcEd.hcArea |= dev->functionAddress & 0x7F;
-        dev->deviceStatus = DEVICE_READY;
-
-        addTimerCallback(&dev->timer, (TimerCallback)hubPeekDeviceDescriptor, req, 10);
+        usbd_diag_log("HUB: set FA err %d -> kill", req->resultCode);
+        killDevice(dev, ep);
     }
 }
 
