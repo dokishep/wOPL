@@ -98,8 +98,8 @@ static void iidx_detect_layout(iidx_device *pad, const u8 *buf, int len)
         pad->btn_byte_offset = 1;
         pad->turntable_is_16bit = 1;
         pad->is_signed_turntable = 1;
-        pad->has_hat = (len >= 16) ? 1 : 0;
-        pad->hat_byte_offset = 15;
+        pad->has_hat = 0;
+        pad->hat_byte_offset = 0;
         pad->is_yuancon_report6 = 1;
         pad->layout_detected = 1;
         DPRINTF("Detected Layout: YuanCon miniDX (Report 0x06, Btns@1, TT@5 signed 16-bit)\n");
@@ -331,17 +331,17 @@ static void iidx_readReport(u8 *buf, int len, iidx_device *pad)
     /*
      * Start & Select:
      * YuanCon miniDX (Report 0x06):
-     *   START is bit 7 (8th bit of B1 / 0x80)
-     *   SELECT is bit 9 (2nd bit of B2 / 0x02)
+     *   SELECT is bit 7 (8th bit of B1 / 0x80)
+     *   START is bit 9 (2nd bit of B2 / 0x02)
      * Other controllers (e.g. Phoenixwan / Arcin / Konami Entry):
      *   SELECT is bit 7 (0x80)
      *   START is bit 8/9 (0x01/0x02 of byte 2)
      */
     if (pad->is_yuancon_report6) {
         if (hid_buttons & (1 << 7))
-            buttons_state &= ~(1 << DS2BtnBit_Start);
-        if ((hid_buttons & (1 << 8)) || (hid_buttons & (1 << 9)))
             buttons_state &= ~(1 << DS2BtnBit_Select);
+        if ((hid_buttons & (1 << 8)) || (hid_buttons & (1 << 9)))
+            buttons_state &= ~(1 << DS2BtnBit_Start);
     } else {
         if (hid_buttons & (1 << 7))
             buttons_state &= ~(1 << DS2BtnBit_Select);
