@@ -3,6 +3,7 @@
 
 #include "irx.h"
 #include "types.h"
+#include "usbd.h"
 #include "ds34common.h"
 
 enum eIIDXHIDStatus {

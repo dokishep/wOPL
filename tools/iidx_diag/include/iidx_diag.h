@@ -1,7 +1,11 @@
 #ifndef _IIDX_DIAG_H_
 #define _IIDX_DIAG_H_
 
+#if defined(_EE) || defined(__EE__)
 #include <tamtypes.h>
+#else
+#include <types.h>
+#endif
 
 #define IIDX_DIAG_RPC_ID 0x49494458 /* "IIDX" */
 
