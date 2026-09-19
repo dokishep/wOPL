@@ -519,13 +519,11 @@ static int iidxhid_connect(int devId)
         }
 
         if (best_ep != NULL) {
-            iidx_pad[pad].interruptEndp = sceUsbdOpenPipe(devId, best_ep);
-            if (iidx_pad[pad].interruptEndp >= 0) {
-                iidx_pad[pad].ep_found = 1;
-                DPRINTF("Opened interrupt IN pipe id=%d addr=%02X pktSize=%u intf=%d\n",
-                        iidx_pad[pad].interruptEndp, best_ep->bEndpointAddress,
-                        iidx_pad[pad].packet_size, iidx_pad[pad].interfaceNumber);
-            }
+            memcpy(&iidx_pad[pad].saved_ep, best_ep, sizeof(UsbEndpointDescriptor));
+            iidx_pad[pad].ep_found = 1;
+            DPRINTF("Found interrupt IN endpoint addr=%02X pktSize=%u intf=%d\n",
+                    best_ep->bEndpointAddress,
+                    iidx_pad[pad].packet_size, iidx_pad[pad].interfaceNumber);
         }
     }
 
@@ -539,11 +537,9 @@ static int iidxhid_connect(int devId)
                 if (pkt == 0 || pkt > 64)
                     pkt = 64;
                 iidx_pad[pad].packet_size = pkt;
-                iidx_pad[pad].interruptEndp = sceUsbdOpenPipe(devId, endpoint);
-                if (iidx_pad[pad].interruptEndp >= 0) {
-                    iidx_pad[pad].ep_found = 1;
-                    break;
-                }
+                memcpy(&iidx_pad[pad].saved_ep, endpoint, sizeof(UsbEndpointDescriptor));
+                iidx_pad[pad].ep_found = 1;
+                break;
             }
             endpoint = (UsbEndpointDescriptor *)((char *)endpoint + endpoint->bLength);
             if (endpoint->bLength < 2)
@@ -551,8 +547,8 @@ static int iidxhid_connect(int devId)
         }
     }
 
-    if (!iidx_pad[pad].ep_found || iidx_pad[pad].interruptEndp < 0) {
-        DPRINTF("connect: failed to find/open interrupt endpoint!\n");
+    if (!iidx_pad[pad].ep_found) {
+        DPRINTF("connect: failed to find interrupt endpoint!\n");
         iidx_release(pad);
         return 1;
     }
@@ -585,13 +581,22 @@ static void iidx_config_set(int result, int count, void *arg)
 
     PollSema(iidx_pad[pad].sema);
 
-    iidx_pad[pad].status |= (IIDXHID_STATE_CONFIGURED | IIDXHID_STATE_RUNNING);
+    if (result == USB_RC_OK) {
+        iidx_pad[pad].status |= (IIDXHID_STATE_CONFIGURED | IIDXHID_STATE_RUNNING);
 
-    /* Send HID SET_IDLE (0 = report on change / continuous) to target interface */
-    sceUsbdControlTransfer(iidx_pad[pad].controlEndp, REQ_USB_OUT, 0x0A /* SET_IDLE */, 0, iidx_pad[pad].interfaceNumber, 0, NULL, NULL, NULL);
+        /* Open interrupt endpoint AFTER configuration is active */
+        if (iidx_pad[pad].ep_found && iidx_pad[pad].interruptEndp < 0) {
+            iidx_pad[pad].interruptEndp = sceUsbdOpenPipe(iidx_pad[pad].devId, &iidx_pad[pad].saved_ep);
+            DPRINTF("Opened interrupt IN pipe id=%d addr=%02X\n",
+                    iidx_pad[pad].interruptEndp, iidx_pad[pad].saved_ep.bEndpointAddress);
+        }
 
-    /* Ensure pad is connected to PADEMU */
-    pademu_connect(&padf[pad]);
+        /* Send HID SET_IDLE (0 = report on change / continuous) to target interface */
+        sceUsbdControlTransfer(iidx_pad[pad].controlEndp, REQ_USB_OUT, 0x0A /* SET_IDLE */, 0, iidx_pad[pad].interfaceNumber, 0, NULL, NULL, NULL);
+
+        /* Ensure pad is connected to PADEMU */
+        pademu_connect(&padf[pad]);
+    }
 
     SignalSema(iidx_pad[pad].sema);
 }

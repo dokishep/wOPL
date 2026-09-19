@@ -363,7 +363,7 @@ void killDevice(Device *dev, Endpoint *ep)
     checkDelayedResets(dev);
 
     dev->resetRetries++;
-    if (dev->resetRetries < 2) {
+    if (dev->resetRetries < 3) {
         hubResetDevice(dev);
     } else {
         usbd_diag_log("HUB: P%d STOP (failed)", dev->attachedToPortNo);
@@ -433,7 +433,7 @@ void fetchConfigDescriptors(IoRequest *req)
             UsbConfigDescriptor *desc = dev->staticDeviceDescEndPtr;
             readLen                   = READ_UINT16(&desc->wTotalLength);
         } else
-            readLen = sizeof(UsbConfigDescriptor);
+            readLen = 4;
 
         if ((u8 *)dev->staticDeviceDescEndPtr + readLen > (u8 *)dev->staticDeviceDescPtr + usbConfig.maxStaticDescSize) {
             usbd_diag_log("HUB: desc too large!");
@@ -509,20 +509,20 @@ void hubSetFuncAddressCB(IoRequest *req)
     Device *dev  = ep->correspDevice;
 
     usbd_diag_log("HUB: set FA cb rc=%d", req->resultCode);
-    if (req->resultCode == USB_RC_NORESPONSE) {
-        dbg_printf("device not responding\n");
+    if (req->resultCode != USB_RC_OK) {
+        dbg_printf("device set address error %d\n", req->resultCode);
         dev->functionDelay <<= 1;
         if (dev->functionDelay <= 0x500)
             addTimerCallback(&dev->timer, (TimerCallback)hubSetFuncAddress, ep, dev->functionDelay);
         else {
-            usbd_diag_log("HUB: set FA noresp -> kill");
+            usbd_diag_log("HUB: set FA err %d -> kill", req->resultCode);
             killDevice(dev, ep);
         }
     } else {
         ep->hcEd.hcArea |= dev->functionAddress & 0x7F;
         dev->deviceStatus = DEVICE_READY;
 
-        addTimerCallback(&dev->timer, (TimerCallback)hubPeekDeviceDescriptor, req, 10);
+        addTimerCallback(&dev->timer, (TimerCallback)hubPeekDeviceDescriptor, req, 20);
     }
 }
 
@@ -537,8 +537,8 @@ void hubSetFuncAddress(Endpoint *ep)
 
 int hubTimedSetFuncAddress(Device *dev)
 {
-    dev->functionDelay = 20;
-    addTimerCallback(&dev->timer, (TimerCallback)hubSetFuncAddress, dev->endpointListStart, 20);
+    dev->functionDelay = 50;
+    addTimerCallback(&dev->timer, (TimerCallback)hubSetFuncAddress, dev->endpointListStart, 50);
     return 0;
 }
 

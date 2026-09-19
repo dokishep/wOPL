@@ -1,5 +1,6 @@
 loadcore_IMPORTS_start
 I_GetLoadcoreInternalData
+I_QueryLibraryEntryTable
 loadcore_IMPORTS_end
 
 sifcmd_IMPORTS_start

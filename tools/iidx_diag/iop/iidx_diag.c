@@ -194,10 +194,6 @@ static int diag_connect(int devId)
         diag_info.active_ep_size = diag_info.endpoints[best_ep_idx].wMaxPacketSize;
         if (diag_info.active_ep_size == 0 || diag_info.active_ep_size > DIAG_PACKET_MAX)
             diag_info.active_ep_size = DIAG_PACKET_MAX;
-
-        if (best_ep_desc != NULL) {
-            interruptEndp = sceUsbdOpenPipe(devId, best_ep_desc);
-        }
     } else {
         diag_info.active_ep_idx = -1;
     }
@@ -218,7 +214,6 @@ static int diag_connect(int devId)
 static void diag_config_set(int result, int count, void *arg)
 {
     int devId = (int)(long)arg;
-    (void)devId;
 
     PollSema(diag_sema);
 
@@ -228,21 +223,27 @@ static void diag_config_set(int result, int count, void *arg)
         diag_info.configured = 1;
         add_log_entry("Config set OK");
 
-        /* Start active endpoint pipe transfers */
-        if (interruptEndp >= 0 || diag_info.active_ep_idx >= 0) {
+        /* Open active endpoint pipe AFTER configuration is active! */
+        if (diag_info.active_ep_idx >= 0 && interruptEndp < 0) {
+            interruptEndp = sceUsbdOpenPipe(devId, &saved_endpoints[diag_info.active_ep_idx]);
             printf(MODNAME ": opened ep pipe id=%d addr=%02X\n",
                    interruptEndp, diag_info.active_ep_addr);
+        }
 
+        if (interruptEndp >= 0) {
             /* Send SET_IDLE 0 to active interface to ensure continuous reporting */
             sceUsbdControlTransfer(controlEndp, REQ_USB_OUT, USB_REQ_SET_IDLE, 0, active_intf_num, 0, NULL, NULL, NULL);
 
             /* Start transfer loop */
             diag_submit_transfer();
         } else {
-            add_log_entry("No IN endpoint found!");
+            add_log_entry("Failed to open EP pipe!");
         }
     } else {
-        add_log_entry("Config set FAILED");
+        char msg[48];
+        sprintf(msg, "Config set FAIL (rc=%d)", result);
+        add_log_entry(msg);
+    }
     }
 
     SignalSema(diag_sema);
@@ -343,37 +344,26 @@ static int diag_disconnect(int devId)
     return 0;
 }
 
+extern void *QueryLibraryEntryTable(iop_library_t *lib);
+
 typedef int (*sceUsbdGetDiagLog_t)(char *dst, int max_len);
 static sceUsbdGetDiagLog_t p_sceUsbdGetDiagLog = NULL;
 
-static int usbd_hook_attempted = 0;
-
 static void init_usbd_diag_hook(void)
 {
-    iop_library_t *lib;
+    iop_library_t lib;
+    struct irx_export_table *table;
 
-    if (usbd_hook_attempted)
+    if (p_sceUsbdGetDiagLog != NULL)
         return;
-    usbd_hook_attempted = 1;
 
-    lib = GetLoadcoreInternalData()->let_next;
-    while (lib != NULL) {
-        if (lib->name[0] == 'u' && lib->name[1] == 's' && lib->name[2] == 'b' && lib->name[3] == 'd') {
-            struct irx_export_table *exp = (struct irx_export_table *)lib;
-            p_sceUsbdGetDiagLog = (sceUsbdGetDiagLog_t)exp->fptrs[17];
-            add_log_entry("USBD hook: OK");
-            return;
-        }
-        lib = lib->prev;
-    }
-    add_log_entry("USBD hook: NOT FOUND");
+    memset(&lib, 0, sizeof(iop_library_t));
+    strncpy(lib.name, "usbd", 8);
 
-    lib = GetLoadcoreInternalData()->let_next;
-    while (lib != NULL) {
-        char msg[48];
-        sprintf(msg, "Lib: %.8s", lib->name);
-        add_log_entry(msg);
-        lib = lib->prev;
+    table = (struct irx_export_table *)QueryLibraryEntryTable(&lib);
+    if (table != NULL) {
+        p_sceUsbdGetDiagLog = (sceUsbdGetDiagLog_t)table->fptrs[17];
+        add_log_entry("USBD hook: OK");
     }
 }
 
