@@ -125,6 +125,8 @@ static int diag_connect(int devId)
     int cur_intf_num = 0;
     int cur_intf_class = 0;
 
+    UsbEndpointDescriptor *best_ep_desc = NULL;
+
     if (config != NULL && config->wTotalLength >= sizeof(UsbConfigDescriptor)) {
         diag_info.bNumInterfaces = config->bNumInterfaces;
         p = (const u8 *)config;
@@ -166,6 +168,7 @@ static int diag_connect(int devId)
                             best_ep_idx = idx;
                             best_ep_score = score;
                             active_intf_num = cur_intf_num;
+                            best_ep_desc = ep;
                         }
                     }
                 }
@@ -191,13 +194,17 @@ static int diag_connect(int devId)
         diag_info.active_ep_size = diag_info.endpoints[best_ep_idx].wMaxPacketSize;
         if (diag_info.active_ep_size == 0 || diag_info.active_ep_size > DIAG_PACKET_MAX)
             diag_info.active_ep_size = DIAG_PACKET_MAX;
+
+        if (best_ep_desc != NULL) {
+            interruptEndp = sceUsbdOpenPipe(devId, best_ep_desc);
+        }
     } else {
         diag_info.active_ep_idx = -1;
     }
 
     add_log_entry("Device attached");
 
-    /* Set device configuration. Endpoint pipe will be opened in callback. */
+    /* Set device configuration. */
     if (config != NULL) {
         sceUsbdSetConfiguration(controlEndp, config->bConfigurationValue, diag_config_set, (void *)(long)devId);
     } else {
@@ -220,9 +227,8 @@ static void diag_config_set(int result, int count, void *arg)
         diag_info.configured = 1;
         add_log_entry("Config set OK");
 
-        /* Open active endpoint pipe */
-        if (diag_info.active_ep_idx >= 0) {
-            interruptEndp = sceUsbdOpenPipe(devId, &saved_endpoints[diag_info.active_ep_idx]);
+        /* Start active endpoint pipe transfers */
+        if (interruptEndp >= 0 || diag_info.active_ep_idx >= 0) {
             printf(MODNAME ": opened ep pipe id=%d addr=%02X\n",
                    interruptEndp, diag_info.active_ep_addr);
 

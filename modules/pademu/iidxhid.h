@@ -80,7 +80,7 @@ typedef struct _iidx_device
         u8 data[18];
     };
 
-    u8 usb_buf[MAX_BUFFER_SIZE + 32] __attribute__((aligned(4)));
+    u8 usb_buf[MAX_BUFFER_SIZE + 32] __attribute__((aligned(64)));
 } iidx_device;
 
 int iidxhid_init(u8 pads, u8 options);
