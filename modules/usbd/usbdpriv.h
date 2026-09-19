@@ -19,7 +19,12 @@
 #include "usbd.h"
 #include "types.h"
 #include "defs.h"
-#include "sysclib.h"
+
+#ifdef index
+#undef index
+#endif
+
+int sprintf(char *buffer, const char *format, ...);
 
 #define OHCI_REG_BASE 0xBF801600
 

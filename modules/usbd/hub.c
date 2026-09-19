@@ -310,10 +310,10 @@ void hubResetDevice(void *devp)
 {
     Device *dev = devp;
     if (memPool.delayResets) {
-        usbd_diag_log("HUB: rst dly P%d", dev->attachedToPortNo);
+        usbd_diag_log("HUB: rst dly P%d", (int)dev->attachedToPortNo);
         dev->deviceStatus = DEVICE_RESETDELAYED;
     } else {
-        usbd_diag_log("HUB: rst P%d", dev->attachedToPortNo);
+        usbd_diag_log("HUB: rst P%d", (int)dev->attachedToPortNo);
         memPool.delayResets = 1;
         dev->deviceStatus   = DEVICE_RESETPENDING;
         dev->resetFlag      = 1;
@@ -358,7 +358,7 @@ int checkDelayedResets(Device *dev)
 
 void killDevice(Device *dev, Endpoint *ep)
 {
-    usbd_diag_log("HUB: killDev P%d #%d", dev->attachedToPortNo, dev->resetRetries + 1);
+    usbd_diag_log("HUB: killDev P%d #%d", (int)dev->attachedToPortNo, (int)(dev->resetRetries + 1));
     removeEndpointFromDevice(dev, ep);
     checkDelayedResets(dev);
 
@@ -366,7 +366,7 @@ void killDevice(Device *dev, Endpoint *ep)
     if (dev->resetRetries < 3) {
         hubResetDevice(dev);
     } else {
-        usbd_diag_log("HUB: P%d STOP (failed)", dev->attachedToPortNo);
+        usbd_diag_log("HUB: P%d STOP (failed)", (int)dev->attachedToPortNo);
     }
 }
 
@@ -415,7 +415,7 @@ void fetchConfigDescriptors(IoRequest *req)
     Device *dev  = ep->correspDevice;
     u16 readLen;
 
-    usbd_diag_log("HUB: cfg rc=%d cnt=%d", req->resultCode, dev->fetchDescriptorCounter);
+    usbd_diag_log("HUB: cfg rc=%d cnt=%d", (int)req->resultCode, (int)dev->fetchDescriptorCounter);
     if ((req->resultCode == USB_RC_OK) || (req->resultCode == 9) || (dev->fetchDescriptorCounter == 0)) {
         int fetchDesc;
 
@@ -448,7 +448,7 @@ void fetchConfigDescriptors(IoRequest *req)
         } else
             connectNewDevice(dev);
     } else {
-        usbd_diag_log("HUB: cfg err %d -> kill", req->resultCode);
+        usbd_diag_log("HUB: cfg err %d -> kill", (int)req->resultCode);
         killDevice(dev, ep);
     }
 }
@@ -461,9 +461,9 @@ void requestDevDescrptCb(IoRequest *req)
     Device *dev               = ep->correspDevice;
     UsbDeviceDescriptor *desc = dev->staticDeviceDescPtr;
 
-    usbd_diag_log("HUB: dev rc=%d len=%d", req->resultCode, req->transferedBytes);
+    usbd_diag_log("HUB: dev rc=%d len=%d", (int)req->resultCode, (int)req->transferedBytes);
     if (req->resultCode == USB_RC_OK || req->resultCode == 9) {
-        usbd_diag_log("HUB: %x:%x ep0=%d", desc->idVendor, desc->idProduct, desc->bMaxPacketSize0);
+        usbd_diag_log("HUB: %x:%x ep0=%d", (unsigned int)desc->idVendor, (unsigned int)desc->idProduct, (int)desc->bMaxPacketSize0);
         if (desc->bMaxPacketSize0 >= 8 && desc->bMaxPacketSize0 <= 64) {
             ep->hcEd.maxPacketSize = (ep->hcEd.maxPacketSize & 0xF800) | desc->bMaxPacketSize0;
         }
@@ -475,7 +475,7 @@ void requestDevDescrptCb(IoRequest *req)
             fetchConfigDescriptors(req);
         }
     } else {
-        usbd_diag_log("HUB: dev err %d -> kill", req->resultCode);
+        usbd_diag_log("HUB: dev err %d -> kill", (int)req->resultCode);
         dbg_printf("unable to read device descriptor, err %d\n", req->resultCode);
         killDevice(dev, ep);
     }
@@ -512,7 +512,7 @@ void hubSetFuncAddressCB(IoRequest *req)
     Endpoint *ep = req->correspEndpoint;
     Device *dev  = ep->correspDevice;
 
-    usbd_diag_log("HUB: set FA cb rc=%d", req->resultCode);
+    usbd_diag_log("HUB: set FA cb rc=%d", (int)req->resultCode);
     if (req->resultCode != USB_RC_OK) {
         dbg_printf("device set address error %d\n", req->resultCode);
         /* Clear ED halt so retry can actually run on OHCI */
@@ -521,7 +521,7 @@ void hubSetFuncAddressCB(IoRequest *req)
         if (dev->functionDelay <= 0x500)
             addTimerCallback(&dev->timer, (TimerCallback)hubSetFuncAddress, ep, dev->functionDelay);
         else {
-            usbd_diag_log("HUB: set FA err %d -> kill", req->resultCode);
+            usbd_diag_log("HUB: set FA err %d -> kill", (int)req->resultCode);
             killDevice(dev, ep);
         }
     } else {
@@ -537,7 +537,7 @@ void hubSetFuncAddress(Endpoint *ep)
 {
     Device *dev = ep->correspDevice;
 
-    usbd_diag_log("HUB: set FA %x", dev->functionAddress);
+    usbd_diag_log("HUB: set FA %x", (unsigned int)dev->functionAddress);
     doControlTransfer(ep, &dev->ioRequest,
                       USB_DIR_OUT | USB_RECIP_DEVICE, USB_REQ_SET_ADDRESS, dev->functionAddress, 0, 0, NULL, hubSetFuncAddressCB);
 }
@@ -553,10 +553,10 @@ void hubPortResetDone(Device *dev)
 {
     Endpoint *ep = openDeviceEndpoint(dev, NULL, 0);
     if (!ep) {
-        usbd_diag_log("HCD: P%d ep0 FAIL", dev->attachedToPortNo);
+        usbd_diag_log("HCD: P%d ep0 FAIL", (int)dev->attachedToPortNo);
         return;
     }
-    usbd_diag_log("HUB: P%d rst done", dev->attachedToPortNo);
+    usbd_diag_log("HUB: P%d rst done", (int)dev->attachedToPortNo);
     hubTimedSetFuncAddress(dev);
 }
 
