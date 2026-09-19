@@ -87,7 +87,27 @@ static void iidx_process_turntable(iidx_device *pad, u16 x_raw, u8 *up_out, u8 *
 static void iidx_detect_layout(iidx_device *pad, const u8 *buf, int len)
 {
     /*
-     * 1. DInput / GP2040-CE / Generic Gamepad (8-bit axes):
+     * 1. YuanCon miniDX / Standard Gamepad with Report ID 0x06:
+     *    buf[0] = 0x06 (Report ID)
+     *    buf[1..4] = 32 Buttons (Buttons 1..32)
+     *    buf[5..6] = X-axis (Turntable, signed 16-bit: -32768..+32767)
+     *    buf[15] = Hat switch
+     */
+    if (len >= 7 && buf[0] == 0x06) {
+        pad->x_byte_offset = 5;
+        pad->btn_byte_offset = 1;
+        pad->turntable_is_16bit = 1;
+        pad->is_signed_turntable = 1;
+        pad->has_hat = (len >= 16) ? 1 : 0;
+        pad->hat_byte_offset = 15;
+        pad->is_yuancon_report6 = 1;
+        pad->layout_detected = 1;
+        DPRINTF("Detected Layout: YuanCon miniDX (Report 0x06, Btns@1, TT@5 signed 16-bit)\n");
+        return;
+    }
+
+    /*
+     * 2. DInput / GP2040-CE / Generic Gamepad (8-bit axes):
      *    buf[0] = X axis (~128)
      *    buf[1] = Y axis (~128)
      *    Both axes resting around 128 (64..192)
@@ -104,7 +124,7 @@ static void iidx_detect_layout(iidx_device *pad, const u8 *buf, int len)
     }
 
     /*
-     * 2. YuanCon / Phoenixwan w/ Report ID:
+     * 3. YuanCon / Phoenixwan w/ Report ID:
      *    buf[0] = Report ID (1..7)
      *    buf[1..2] = buttons (< 64 at rest)
      *    buf[3..4] = TT 16-bit (~32767)
@@ -224,7 +244,12 @@ static void iidx_readReport(u8 *buf, int len, iidx_device *pad)
     /* Read turntable axis */
     if (pad->turntable_is_16bit) {
         if (pad->x_byte_offset + 1 < len) {
-            x_raw = (u16)(buf[pad->x_byte_offset] | (buf[pad->x_byte_offset + 1] << 8));
+            if (pad->is_signed_turntable) {
+                int16_t s_x = (int16_t)(buf[pad->x_byte_offset] | (buf[pad->x_byte_offset + 1] << 8));
+                x_raw = (u16)(s_x + 32768);
+            } else {
+                x_raw = (u16)(buf[pad->x_byte_offset] | (buf[pad->x_byte_offset + 1] << 8));
+            }
         }
     } else {
         if (pad->x_byte_offset < len) {
@@ -372,6 +397,12 @@ static int iidxhid_probe(int devId)
         return 0;
     }
 
+    /* Explicitly claim YuanCon miniDX: VID 0x1ccf, PID 0x8048 */
+    if (device->idVendor == 0x1ccf && device->idProduct == 0x8048) {
+        DPRINTF("probe: matched YuanCon miniDX (%04X:%04X)\n", device->idVendor, device->idProduct);
+        return 1;
+    }
+
     /* Check if configuration descriptor has a Mass Storage interface (0x08) */
     UsbConfigDescriptor *config = (UsbConfigDescriptor *)sceUsbdScanStaticDescriptor(devId, device, USB_DT_CONFIG);
     if (!config)
@@ -443,11 +474,13 @@ static int iidxhid_connect(int devId)
         config = (UsbConfigDescriptor *)sceUsbdScanStaticDescriptor(devId, NULL, USB_DT_CONFIG);
     }
 
-    /* Scan configuration descriptor buffer for Interrupt IN endpoint */
+    /* Scan configuration descriptor buffer for Interrupt IN endpoint (prioritizing HID interface) */
     if (config != NULL && config->wTotalLength >= sizeof(UsbConfigDescriptor)) {
         const u8 *p = (const u8 *)config;
         const u8 *end = p + config->wTotalLength;
-        int cur_intf = 0;
+        int cur_intf_num = 0;
+        int cur_intf_class = 0;
+        int best_score = 0;
 
         while (p + 2 <= end) {
             u8 len = p[0];
@@ -457,21 +490,29 @@ static int iidxhid_connect(int devId)
 
             if (type == USB_DT_INTERFACE && len >= sizeof(UsbInterfaceDescriptor)) {
                 UsbInterfaceDescriptor *intf = (UsbInterfaceDescriptor *)p;
-                cur_intf = intf->bInterfaceNumber;
+                cur_intf_num = intf->bInterfaceNumber;
+                cur_intf_class = intf->bInterfaceClass;
             } else if (type == USB_DT_ENDPOINT && len >= sizeof(UsbEndpointDescriptor)) {
                 UsbEndpointDescriptor *ep = (UsbEndpointDescriptor *)p;
                 if ((ep->bmAttributes & 0x03) == USB_ENDPOINT_XFER_INT &&
                     (ep->bEndpointAddress & USB_ENDPOINT_DIR_MASK) == USB_DIR_IN) {
-                    u16 pkt = (ep->wMaxPacketSizeHB << 8) | ep->wMaxPacketSizeLB;
-                    if (pkt == 0 || pkt > 64)
-                        pkt = 64;
-                    iidx_pad[pad].packet_size = pkt;
-                    iidx_pad[pad].interfaceNumber = cur_intf;
-                    memcpy(&iidx_pad[pad].saved_ep, ep, sizeof(UsbEndpointDescriptor));
-                    iidx_pad[pad].ep_found = 1;
-                    DPRINTF("Found interrupt IN endpoint addr=%02X pktSize=%u\n",
-                            ep->bEndpointAddress, pkt);
-                    break;
+                    int score = (cur_intf_class == USB_CLASS_HID) ? 2 : 1;
+                    if (score > best_score) {
+                        best_score = score;
+                        u16 pkt = (ep->wMaxPacketSizeHB << 8) | ep->wMaxPacketSizeLB;
+                        if (pkt == 0 || pkt > 64)
+                            pkt = 64;
+                        iidx_pad[pad].packet_size = pkt;
+                        iidx_pad[pad].interfaceNumber = cur_intf_num;
+                        memcpy(&iidx_pad[pad].saved_ep, ep, sizeof(UsbEndpointDescriptor));
+                        iidx_pad[pad].ep_found = 1;
+                        DPRINTF("Found interrupt IN endpoint addr=%02X pktSize=%u intf=%d (class %02X, score %d)\n",
+                                ep->bEndpointAddress, pkt, cur_intf_num, cur_intf_class, score);
+                        if (score == 2) {
+                            /* Found HID interface endpoint - optimal! */
+                            break;
+                        }
+                    }
                 }
             }
 
@@ -533,8 +574,8 @@ static void iidx_config_set(int result, int count, void *arg)
         /* Open interrupt endpoint after configuration is successfully applied */
         iidx_pad[pad].interruptEndp = sceUsbdOpenPipe(iidx_pad[pad].devId, &iidx_pad[pad].saved_ep);
 
-        /* Send HID SET_IDLE (0 = report on change / continuous) */
-        sceUsbdControlTransfer(iidx_pad[pad].controlEndp, REQ_USB_OUT, 0x0A /* SET_IDLE */, 0, 0, 0, NULL, NULL, NULL);
+        /* Send HID SET_IDLE (0 = report on change / continuous) to target interface */
+        sceUsbdControlTransfer(iidx_pad[pad].controlEndp, REQ_USB_OUT, 0x0A /* SET_IDLE */, 0, iidx_pad[pad].interfaceNumber, 0, NULL, NULL, NULL);
 
         /* Ensure pad is connected to PADEMU */
         pademu_connect(&padf[pad]);
@@ -596,6 +637,8 @@ static void iidx_release(int pad)
     iidx_pad[pad].ep_found = 0;
     iidx_pad[pad].tt_up = 0;
     iidx_pad[pad].tt_down = 0;
+    iidx_pad[pad].is_signed_turntable = 0;
+    iidx_pad[pad].is_yuancon_report6 = 0;
 
     SignalSema(iidx_pad[pad].sema);
 

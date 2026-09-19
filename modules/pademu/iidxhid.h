@@ -60,7 +60,9 @@ typedef struct _iidx_device
     u8 btn_byte_offset;
     u8 hat_byte_offset;
     u8 turntable_is_16bit;
+    u8 is_signed_turntable;
     u8 has_hat;
+    u8 is_yuancon_report6;
     u16 packet_size;
     volatile u8 transfer_active;
     UsbEndpointDescriptor saved_ep;

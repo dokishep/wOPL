@@ -119,6 +119,11 @@ static int diag_connect(int devId)
     if (config == NULL)
         config = (UsbConfigDescriptor *)sceUsbdScanStaticDescriptor(devId, NULL, USB_DT_CONFIG);
 
+    static int active_intf_num = 0;
+    int best_ep_score = 0;
+    int cur_intf_num = 0;
+    int cur_intf_class = 0;
+
     if (config != NULL && config->wTotalLength >= sizeof(UsbConfigDescriptor)) {
         diag_info.bNumInterfaces = config->bNumInterfaces;
         p = (const u8 *)config;
@@ -136,6 +141,8 @@ static int diag_connect(int devId)
                 diag_info.bInterfaceClass = intf->bInterfaceClass;
                 diag_info.bInterfaceSubClass = intf->bInterfaceSubClass;
                 diag_info.bInterfaceProtocol = intf->bInterfaceProtocol;
+                cur_intf_num = intf->bInterfaceNumber;
+                cur_intf_class = intf->bInterfaceClass;
             } else if (type == USB_DT_ENDPOINT && len >= sizeof(UsbEndpointDescriptor)) {
                 if (diag_info.num_endpoints < DIAG_MAX_ENDPOINTS) {
                     UsbEndpointDescriptor *ep = (UsbEndpointDescriptor *)p;
@@ -150,11 +157,15 @@ static int diag_connect(int devId)
                     memcpy(&saved_endpoints[idx], ep, sizeof(UsbEndpointDescriptor));
                     diag_info.num_endpoints++;
 
-                    /* Look for first Interrupt IN endpoint */
-                    if (best_ep_idx < 0 &&
-                        (ep->bmAttributes & 0x03) == USB_ENDPOINT_XFER_INT &&
+                    /* Look for Interrupt IN endpoint, prioritizing HID interface (class 0x03) */
+                    if ((ep->bmAttributes & 0x03) == USB_ENDPOINT_XFER_INT &&
                         (ep->bEndpointAddress & USB_ENDPOINT_DIR_MASK) == USB_DIR_IN) {
-                        best_ep_idx = idx;
+                        int score = (cur_intf_class == 0x03) ? 2 : 1;
+                        if (score > best_ep_score) {
+                            best_ep_idx = idx;
+                            best_ep_score = score;
+                            active_intf_num = cur_intf_num;
+                        }
                     }
                 }
             }
@@ -214,8 +225,8 @@ static void diag_config_set(int result, int count, void *arg)
             printf(MODNAME ": opened ep pipe id=%d addr=%02X\n",
                    interruptEndp, diag_info.active_ep_addr);
 
-            /* Send SET_IDLE 0 to ensure continuous reporting */
-            sceUsbdControlTransfer(controlEndp, REQ_USB_OUT, USB_REQ_SET_IDLE, 0, 0, 0, NULL, NULL, NULL);
+            /* Send SET_IDLE 0 to active interface to ensure continuous reporting */
+            sceUsbdControlTransfer(controlEndp, REQ_USB_OUT, USB_REQ_SET_IDLE, 0, active_intf_num, 0, NULL, NULL, NULL);
 
             /* Start transfer loop */
             diag_submit_transfer();

@@ -74,6 +74,22 @@ jobs:
             iidx_diag.elf
           if-no-files-found: warn
 
+      - name: Create GitHub Release on Tag
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            WOPNPS2LD-*.ELF
+            OPNPS2LD.ELF
+            wopl.elf
+            iidx_diag.elf
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Build Debug wOPL (if requested)
         if: ${{ inputs.debug == true }}
         run: |
