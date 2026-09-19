@@ -11,14 +11,15 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sbv_patches.h>
+#include <iopheap.h>
 
 #include "../include/iidx_diag.h"
 
-extern void usbd_mini_irx;
-extern int size_usbd_mini_irx;
+extern unsigned char usbd_mini_irx[];
+extern unsigned int size_usbd_mini_irx;
 
-extern void iidx_diag_irx;
-extern int size_iidx_diag_irx;
+extern unsigned char iidx_diag_irx[];
+extern unsigned int size_iidx_diag_irx;
 
 static SifRpcClientData_t diag_client;
 static u8 rpc_buf[sizeof(iidx_diag_data_t) + 128] __attribute__((aligned(64)));
@@ -128,13 +129,13 @@ int main(int argc, char *argv[])
     /* Load USBD */
     scr_printf("Loading USBD driver... ");
     ret = -999;
-    SifExecModuleBuffer(&usbd_mini_irx, size_usbd_mini_irx, 0, NULL, &ret);
+    SifExecModuleBuffer(usbd_mini_irx, size_usbd_mini_irx, 0, NULL, &ret);
     scr_printf("id=%d\n", ret);
 
     /* Load IIDX Diag IOP driver */
     scr_printf("Loading IIDX Diag IOP driver... ");
     ret = -999;
-    SifExecModuleBuffer(&iidx_diag_irx, size_iidx_diag_irx, 0, NULL, &ret);
+    SifExecModuleBuffer(iidx_diag_irx, size_iidx_diag_irx, 0, NULL, &ret);
     scr_printf("id=%d\n", ret);
 
     /* Bind to RPC */
