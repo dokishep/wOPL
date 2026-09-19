@@ -19,6 +19,7 @@
 #include "usbd.h"
 #include "types.h"
 #include "defs.h"
+#include "sysclib.h"
 
 #define OHCI_REG_BASE 0xBF801600
 
@@ -29,7 +30,12 @@
 #define dbg_printf(a...) (void)0
 #endif
 
-void usbd_diag_log(const char *fmt, ...);
+void usbd_diag_log_raw(const char *msg);
+#define usbd_diag_log(fmt, ...) do { \
+    char _diag_msg_buf[48]; \
+    sprintf(_diag_msg_buf, fmt, ##__VA_ARGS__); \
+    usbd_diag_log_raw(_diag_msg_buf); \
+} while(0)
 int sceUsbdGetDiagLog(char *dst, int max_len);
 
 #define READ_UINT16(a) (((u8 *)a)[0] | (((u8 *)a)[1] << 8))

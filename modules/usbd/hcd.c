@@ -233,7 +233,7 @@ void handleRhsc(void)
             }
         } else {
             if (port->deviceStatus != DEVICE_NOTCONNECTED)
-                usbd_diag_log("HCD: P%d disc st=%08x", portNum + 1, status);
+                usbd_diag_log("HCD: P%d disc st=%x", portNum + 1, status);
             flushPort(port);
         }
         port = port->next;

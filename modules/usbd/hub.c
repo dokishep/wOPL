@@ -463,7 +463,7 @@ void requestDevDescrptCb(IoRequest *req)
 
     usbd_diag_log("HUB: dev rc=%d len=%d", req->resultCode, req->transferedBytes);
     if (req->resultCode == USB_RC_OK || req->resultCode == 9) {
-        usbd_diag_log("HUB: %04X:%04X ep0=%d", desc->idVendor, desc->idProduct, desc->bMaxPacketSize0);
+        usbd_diag_log("HUB: %x:%x ep0=%d", desc->idVendor, desc->idProduct, desc->bMaxPacketSize0);
         if (desc->bMaxPacketSize0 >= 8 && desc->bMaxPacketSize0 <= 64) {
             ep->hcEd.maxPacketSize = (ep->hcEd.maxPacketSize & 0xF800) | desc->bMaxPacketSize0;
         }
@@ -515,6 +515,8 @@ void hubSetFuncAddressCB(IoRequest *req)
     usbd_diag_log("HUB: set FA cb rc=%d", req->resultCode);
     if (req->resultCode != USB_RC_OK) {
         dbg_printf("device set address error %d\n", req->resultCode);
+        /* Clear ED halt so retry can actually run on OHCI */
+        ep->hcEd.tdHead = (HcTD *)((u32)ep->hcEd.tdHead & ~0xF);
         dev->functionDelay <<= 1;
         if (dev->functionDelay <= 0x500)
             addTimerCallback(&dev->timer, (TimerCallback)hubSetFuncAddress, ep, dev->functionDelay);
@@ -523,6 +525,7 @@ void hubSetFuncAddressCB(IoRequest *req)
             killDevice(dev, ep);
         }
     } else {
+        dev->resetRetries = 0;
         ep->hcEd.hcArea |= dev->functionAddress & 0x7F;
         dev->deviceStatus = DEVICE_READY;
 
@@ -534,7 +537,7 @@ void hubSetFuncAddress(Endpoint *ep)
 {
     Device *dev = ep->correspDevice;
 
-    usbd_diag_log("HUB: set FA %02X", dev->functionAddress);
+    usbd_diag_log("HUB: set FA %x", dev->functionAddress);
     doControlTransfer(ep, &dev->ioRequest,
                       USB_DIR_OUT | USB_RECIP_DEVICE, USB_REQ_SET_ADDRESS, dev->functionAddress, 0, 0, NULL, hubSetFuncAddressCB);
 }
@@ -546,43 +549,6 @@ int hubTimedSetFuncAddress(Device *dev)
     return 0;
 }
 
-void hubPeekDesc0CB(IoRequest *req)
-{
-    Endpoint *ep              = req->correspEndpoint;
-    Device *dev               = ep->correspDevice;
-    UsbDeviceDescriptor *desc = (UsbDeviceDescriptor *)dev->staticDeviceDescPtr;
-
-    usbd_diag_log("HUB: d0 rc=%d len=%d", req->resultCode, req->transferedBytes);
-
-    if (req->resultCode == USB_RC_OK || req->resultCode == 9) {
-        if (desc->bLength >= 8 && desc->bDescriptorType == USB_DT_DEVICE) {
-            usbd_diag_log("HUB: P%d ep0 max=%d", dev->attachedToPortNo, desc->bMaxPacketSize0);
-            if (desc->bMaxPacketSize0 >= 8 && desc->bMaxPacketSize0 <= 64) {
-                ep->hcEd.maxPacketSize = (ep->hcEd.maxPacketSize & 0xF800) | desc->bMaxPacketSize0;
-            }
-        }
-    } else {
-        usbd_diag_log("HUB: d0 err %d", req->resultCode);
-    }
-
-    hubTimedSetFuncAddress(dev);
-}
-
-void hubPeekDesc0(Device *dev)
-{
-    Endpoint *ep = dev->endpointListStart;
-    if (!ep) {
-        usbd_diag_log("HUB: P%d no ep0", dev->attachedToPortNo);
-        return;
-    }
-
-    usbd_diag_log("HUB: P%d peek d0", dev->attachedToPortNo);
-    dev->staticDeviceDescEndPtr = dev->staticDeviceDescPtr;
-    doControlTransfer(ep, &dev->ioRequest,
-                      USB_DIR_IN | USB_RECIP_DEVICE, USB_REQ_GET_DESCRIPTOR, USB_DT_DEVICE << 8, 0, 8,
-                      dev->staticDeviceDescPtr, hubPeekDesc0CB);
-}
-
 void hubPortResetDone(Device *dev)
 {
     Endpoint *ep = openDeviceEndpoint(dev, NULL, 0);
@@ -591,7 +557,7 @@ void hubPortResetDone(Device *dev)
         return;
     }
     usbd_diag_log("HUB: P%d rst done", dev->attachedToPortNo);
-    addTimerCallback(&dev->timer, (TimerCallback)hubPeekDesc0, dev, 20);
+    hubTimedSetFuncAddress(dev);
 }
 
 void hubGetPortStatusCallback(IoRequest *req)

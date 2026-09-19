@@ -69,19 +69,14 @@ static char usbd_diag_buf[USBD_DIAG_LOG_MAX][USBD_DIAG_LOG_LEN];
 static int usbd_diag_head = 0;
 static int usbd_diag_tail = 0;
 
-void usbd_diag_log(const char *fmt, ...)
+void usbd_diag_log_raw(const char *msg)
 {
-    char temp[USBD_DIAG_LOG_LEN];
-    va_list args;
     int oldIntr;
-
-    va_start(args, fmt);
-    vsprintf(temp, fmt, args);
-    va_end(args);
-    temp[USBD_DIAG_LOG_LEN - 1] = '\0';
+    if (!msg)
+        return;
 
     CpuSuspendIntr(&oldIntr);
-    strncpy(usbd_diag_buf[usbd_diag_head], temp, USBD_DIAG_LOG_LEN - 1);
+    strncpy(usbd_diag_buf[usbd_diag_head], msg, USBD_DIAG_LOG_LEN - 1);
     usbd_diag_buf[usbd_diag_head][USBD_DIAG_LOG_LEN - 1] = '\0';
     usbd_diag_head = (usbd_diag_head + 1) % USBD_DIAG_LOG_MAX;
     if (usbd_diag_head == usbd_diag_tail) {
