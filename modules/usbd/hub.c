@@ -416,8 +416,13 @@ void fetchConfigDescriptors(IoRequest *req)
     u16 readLen;
 
     usbd_diag_log("HUB: cfg rc=%d cnt=%d", (int)req->resultCode, (int)dev->fetchDescriptorCounter);
-    if ((req->resultCode == USB_RC_OK) || (req->resultCode == 9) || (dev->fetchDescriptorCounter == 0)) {
+    if ((req->resultCode == USB_RC_OK) || (req->resultCode == 9) || (req->resultCode == 8) || (dev->fetchDescriptorCounter == 0)) {
         int fetchDesc;
+
+        /* If previous transfer had a data overrun, clear ED halt so subsequent transfers can proceed */
+        if (req->resultCode == 8) {
+            ep->hcEd.tdHead = (HcTD *)((u32)ep->hcEd.tdHead & ~0xF);
+        }
 
         u32 curDescNum = dev->fetchDescriptorCounter++;
 
@@ -429,13 +434,22 @@ void fetchConfigDescriptors(IoRequest *req)
             dev->staticDeviceDescEndPtr = (void *)((u8 *)(dev->staticDeviceDescEndPtr) + READ_UINT16(&desc->wTotalLength));
         }
 
+        u16 epMaxPkt = ep->hcEd.maxPacketSize & 0x7FF;
+        if (epMaxPkt < 8)
+            epMaxPkt = 8;
+
         if (fetchDesc) {
             UsbConfigDescriptor *desc = dev->staticDeviceDescEndPtr;
             readLen                   = READ_UINT16(&desc->wTotalLength);
-        } else
-            readLen = sizeof(UsbConfigDescriptor);
+        } else {
+            readLen                   = epMaxPkt;
+        }
 
-        if ((u8 *)dev->staticDeviceDescEndPtr + readLen > (u8 *)dev->staticDeviceDescPtr + usbConfig.maxStaticDescSize) {
+        u16 transferLen = readLen;
+        if (transferLen < epMaxPkt)
+            transferLen = epMaxPkt;
+
+        if ((u8 *)dev->staticDeviceDescEndPtr + transferLen > (u8 *)dev->staticDeviceDescPtr + usbConfig.maxStaticDescSize) {
             usbd_diag_log("HUB: desc too large!");
             dbg_printf("USBD: Device ignored, Device descriptors too large\n");
             return; // buffer is too small, silently ignore the device
@@ -443,7 +457,7 @@ void fetchConfigDescriptors(IoRequest *req)
 
         if (curDescNum < ((UsbDeviceDescriptor *)dev->staticDeviceDescPtr)->bNumConfigurations) {
             doControlTransfer(ep, &dev->ioRequest,
-                              USB_DIR_IN | USB_RECIP_DEVICE, USB_REQ_GET_DESCRIPTOR, (USB_DT_CONFIG << 8) | curDescNum, 0, readLen,
+                              USB_DIR_IN | USB_RECIP_DEVICE, USB_REQ_GET_DESCRIPTOR, (USB_DT_CONFIG << 8) | curDescNum, 0, transferLen,
                               dev->staticDeviceDescEndPtr, fetchConfigDescriptors);
         } else
             connectNewDevice(dev);
