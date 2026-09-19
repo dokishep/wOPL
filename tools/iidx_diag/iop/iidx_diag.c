@@ -30,6 +30,7 @@ static SifRpcServerData_t rpc_svr __attribute__((aligned(16)));
 static u8 rpc_buf[sizeof(iidx_diag_data_t) + 128] __attribute__((aligned(64)));
 
 static int diag_sema = -1;
+static int active_intf_num = 0;
 
 /* Store raw endpoint descriptors so we can re-open on EP switch */
 static UsbEndpointDescriptor saved_endpoints[DIAG_MAX_ENDPOINTS];
@@ -119,7 +120,7 @@ static int diag_connect(int devId)
     if (config == NULL)
         config = (UsbConfigDescriptor *)sceUsbdScanStaticDescriptor(devId, NULL, USB_DT_CONFIG);
 
-    static int active_intf_num = 0;
+    active_intf_num = 0;
     int best_ep_score = 0;
     int cur_intf_num = 0;
     int cur_intf_class = 0;
