@@ -328,12 +328,26 @@ static void iidx_readReport(u8 *buf, int len, iidx_device *pad)
     if (hid_buttons & (1 << 6))
         buttons_state &= ~(1 << DS2BtnBit_Left);
 
-    if (hid_buttons & (1 << 7))
-        buttons_state &= ~(1 << DS2BtnBit_Select);
-
-    /* Start: support both button 9 (bit 8) and button 10 (bit 9) */
-    if ((hid_buttons & (1 << 8)) || (hid_buttons & (1 << 9)))
-        buttons_state &= ~(1 << DS2BtnBit_Start);
+    /*
+     * Start & Select:
+     * YuanCon miniDX (Report 0x06):
+     *   START is bit 7 (8th bit of B1 / 0x80)
+     *   SELECT is bit 9 (2nd bit of B2 / 0x02)
+     * Other controllers (e.g. Phoenixwan / Arcin / Konami Entry):
+     *   SELECT is bit 7 (0x80)
+     *   START is bit 8/9 (0x01/0x02 of byte 2)
+     */
+    if (pad->is_yuancon_report6) {
+        if (hid_buttons & (1 << 7))
+            buttons_state &= ~(1 << DS2BtnBit_Start);
+        if ((hid_buttons & (1 << 8)) || (hid_buttons & (1 << 9)))
+            buttons_state &= ~(1 << DS2BtnBit_Select);
+    } else {
+        if (hid_buttons & (1 << 7))
+            buttons_state &= ~(1 << DS2BtnBit_Select);
+        if ((hid_buttons & (1 << 8)) || (hid_buttons & (1 << 9)))
+            buttons_state &= ~(1 << DS2BtnBit_Start);
+    }
 
     if (up)
         buttons_state &= ~(1 << DS2BtnBit_Up);

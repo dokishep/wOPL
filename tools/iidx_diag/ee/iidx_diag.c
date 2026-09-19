@@ -319,6 +319,26 @@ int main(int argc, char *argv[])
             scr_printf("\nB2: "); print_bits(diag.current_packet[2]);
             scr_printf("  B3: "); print_bits(diag.current_packet[3]);
             scr_printf("\n");
+
+            {
+                u8 b1 = (diag.last_bytes > 1) ? diag.current_packet[1] : 0;
+                u8 b2 = (diag.last_bytes > 2) ? diag.current_packet[2] : 0;
+                s16 tt = (diag.last_bytes >= 7 && diag.current_packet[0] == 0x06) ?
+                         (s16)(diag.current_packet[5] | (diag.current_packet[6] << 8)) : 0;
+                const char *tt_str = (tt > 16000) ? "CW [DOWN]" : (tt < -16000) ? "CCW [UP] " : "STOPPED  ";
+
+                scr_printf("IIDX: [1:%c] [2:%c] [3:%c] [4:%c] [5:%c] [6:%c] [7:%c] [ST:%c] [SEL:%c] TT:%s\n",
+                           (b1 & 0x01) ? '*' : '.',
+                           (b1 & 0x02) ? '*' : '.',
+                           (b1 & 0x04) ? '*' : '.',
+                           (b1 & 0x08) ? '*' : '.',
+                           (b1 & 0x10) ? '*' : '.',
+                           (b1 & 0x20) ? '*' : '.',
+                           (b1 & 0x40) ? '*' : '.',
+                           (b1 & 0x80) ? '*' : '.',
+                           (b2 & 0x02) ? '*' : '.',
+                           tt_str);
+            }
         }
 
         scr_printf("----------------------------------------------------------------\n");
