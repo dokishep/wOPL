@@ -57,6 +57,9 @@ typedef struct _iidx_device
     u8 layout_detected;
     u8 x_byte_offset;
     u8 btn_byte_offset;
+    u8 hat_byte_offset;
+    u8 turntable_is_16bit;
+    u8 has_hat;
     u16 packet_size;
     volatile u8 transfer_active;
 

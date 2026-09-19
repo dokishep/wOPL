@@ -84,74 +84,167 @@ static void iidx_process_turntable(iidx_device *pad, u16 x_raw, u8 *up_out, u8 *
     }
 }
 
-static void iidx_readReport(u8 *buf, iidx_device *pad)
+static void iidx_detect_layout(iidx_device *pad, const u8 *buf, int len)
+{
+    /*
+     * 1. DInput / GP2040-CE / Generic Gamepad (8-bit axes):
+     *    buf[0] = X axis (~128)
+     *    buf[1] = Y axis (~128)
+     *    Both axes resting around 128 (64..192)
+     */
+    if (len >= 6 && buf[0] >= 64 && buf[0] <= 192 && buf[1] >= 64 && buf[1] <= 192) {
+        pad->x_byte_offset = 0;
+        pad->turntable_is_16bit = 0;
+        pad->has_hat = 1;
+        pad->hat_byte_offset = 4;
+        pad->btn_byte_offset = (len >= 7) ? 5 : 4;
+        pad->layout_detected = 1;
+        DPRINTF("Detected Layout: DInput/GP2040-CE (Btns@%d, TT@0 8-bit)\n", pad->btn_byte_offset);
+        return;
+    }
+
+    /*
+     * 2. YuanCon / Phoenixwan w/ Report ID:
+     *    buf[0] = Report ID (1..7)
+     *    buf[1..2] = buttons (< 64 at rest)
+     *    buf[3..4] = TT 16-bit (~32767)
+     */
+    if (len >= 5 && buf[0] > 0 && buf[0] < 8) {
+        u16 tt3 = (u16)(buf[3] | (buf[4] << 8));
+        if (tt3 >= 16000 && tt3 <= 48000) {
+            pad->x_byte_offset = 3;
+            pad->btn_byte_offset = 1;
+            pad->turntable_is_16bit = 1;
+            pad->has_hat = 0;
+            pad->layout_detected = 1;
+            DPRINTF("Detected Layout: YuanCon/ReportID (Btns@1, TT@3 16-bit)\n");
+            return;
+        }
+    }
+
+    /*
+     * 3. DJ DAO / Phoenixwan (Arcin):
+     *    buf[0..1] = buttons (< 64 at rest)
+     *    buf[2..3] = TT 16-bit (~32767)
+     */
+    if (len >= 4) {
+        u16 tt2 = (u16)(buf[2] | (buf[3] << 8));
+        if (tt2 >= 16000 && tt2 <= 48000) {
+            pad->x_byte_offset = 2;
+            pad->btn_byte_offset = 0;
+            pad->turntable_is_16bit = 1;
+            pad->has_hat = 0;
+            pad->layout_detected = 1;
+            DPRINTF("Detected Layout: DAO/Phoenixwan (Btns@0, TT@2 16-bit)\n");
+            return;
+        }
+    }
+
+    /*
+     * 4. Konami Official Entry Model (16-64 bytes)
+     */
+    if (len >= 14) {
+        u16 tt0 = (u16)(buf[0] | (buf[1] << 8));
+        u16 tt1 = (u16)(buf[1] | (buf[2] << 8));
+        if (tt0 >= 16000 && tt0 <= 48000) {
+            pad->x_byte_offset = 0;
+            pad->btn_byte_offset = 12;
+            pad->turntable_is_16bit = 1;
+            pad->has_hat = 0;
+            pad->layout_detected = 1;
+            DPRINTF("Detected Layout: Konami Entry Model (Btns@12, TT@0 16-bit)\n");
+            return;
+        } else if (tt1 >= 16000 && tt1 <= 48000) {
+            pad->x_byte_offset = 1;
+            pad->btn_byte_offset = 13;
+            pad->turntable_is_16bit = 1;
+            pad->has_hat = 0;
+            pad->layout_detected = 1;
+            DPRINTF("Detected Layout: Konami Entry Model w/ ReportID (Btns@13, TT@1 16-bit)\n");
+            return;
+        }
+    }
+
+    /*
+     * 5. Default Fallback: Btns@0, TT@2 (standard DAO/Phoenixwan)
+     */
+    if (buf[0] > 0 && buf[0] < 8) {
+        pad->x_byte_offset = 3;
+        pad->btn_byte_offset = 1;
+    } else {
+        pad->x_byte_offset = 2;
+        pad->btn_byte_offset = 0;
+    }
+    pad->turntable_is_16bit = 1;
+    pad->has_hat = 0;
+}
+
+static void iidx_readReport(u8 *buf, int len, iidx_device *pad)
 {
     u16 x_raw = 0x7FFF;
     u32 hid_buttons = 0;
     u8 up = 0, down = 0;
 
-    if (pad->packet_size < 16) {
-        /* Standard compact USB HID Gamepad (typically 6-10 bytes) */
-        int xo = (buf[0] > 0 && buf[0] < 8) ? 1 : 0;
-        int bo = (buf[0] > 0 && buf[0] < 8) ? 5 : 4;
+    if (!pad->layout_detected) {
+        iidx_detect_layout(pad, buf, len);
+    }
 
-        /* If 8-bit axis centered around 128 */
-        x_raw = (u16)buf[xo] * 257;
-        hid_buttons = (u32)(buf[bo] | (buf[bo + 1] << 8));
-    } else {
-        /*
-         * Dedicated arcade controller layout (16-64 bytes)
-         * Non-blocking dynamic layout auto-detection based on turntable resting center value (~32767).
-         * Once detected, layout_detected is locked to 1.
-         */
-        if (!pad->layout_detected) {
-            u16 c0 = (u16)(buf[0] | (buf[1] << 8));
-            u16 c1 = (u16)(buf[1] | (buf[2] << 8));
-            u16 c4 = (u16)(buf[4] | (buf[5] << 8));
-            u16 c5 = (u16)(buf[5] | (buf[6] << 8));
+    /* Read buttons from detected offset */
+    if (pad->btn_byte_offset + 1 < len) {
+        hid_buttons = (u32)(buf[pad->btn_byte_offset] | (buf[pad->btn_byte_offset + 1] << 8));
+        if (pad->btn_byte_offset + 3 < len) {
+            hid_buttons |= (u32)((buf[pad->btn_byte_offset + 2] << 16) | (buf[pad->btn_byte_offset + 3] << 24));
+        }
+    }
 
-            if (c0 >= 24000 && c0 <= 42000) {
-                pad->x_byte_offset = 0;
-                pad->btn_byte_offset = 12;
-                pad->layout_detected = 1;
-                DPRINTF("Auto-detected layout 1: X at offset 0, Buttons at offset 12\n");
-            } else if (c1 >= 24000 && c1 <= 42000) {
-                pad->x_byte_offset = 1;
-                pad->btn_byte_offset = 13;
-                pad->layout_detected = 1;
-                DPRINTF("Auto-detected layout 2: X at offset 1, Buttons at offset 13\n");
-            } else if (c4 >= 24000 && c4 <= 42000) {
-                pad->x_byte_offset = 4;
-                pad->btn_byte_offset = 0;
-                pad->layout_detected = 1;
-                DPRINTF("Auto-detected layout 3: X at offset 4, Buttons at offset 0\n");
-            } else if (c5 >= 24000 && c5 <= 42000) {
-                pad->x_byte_offset = 5;
-                pad->btn_byte_offset = 1;
-                pad->layout_detected = 1;
-                DPRINTF("Auto-detected layout 4: X at offset 5, Buttons at offset 1\n");
+    /*
+     * Dynamic button fail-safe:
+     * If hid_buttons is 0 (no buttons registered at current btn_byte_offset),
+     * check if any candidate offset in buf[] has buttons pressed!
+     * Candidate offsets: 0, 1, 2, 4, 5, 12, 13
+     */
+    if (hid_buttons == 0) {
+        static const u8 candidates[] = {0, 1, 2, 4, 5, 12, 13};
+        int c;
+        for (c = 0; c < (int)(sizeof(candidates)/sizeof(candidates[0])); c++) {
+            int off = candidates[c];
+            if (off + 1 < len && off != pad->x_byte_offset && (!pad->has_hat || off != pad->hat_byte_offset)) {
+                u16 val = (u16)(buf[off] | (buf[off + 1] << 8));
+                /* Exclude analog resting values (e.g. 0x8080 or ~32768) */
+                if (val != 0 && (val & 0xFF) != 0x80 && (val & 0xFF) != 0x7F) {
+                    hid_buttons = (u32)val;
+                    pad->btn_byte_offset = off;
+                    DPRINTF("Dynamic button fail-safe: locked to offset %d\n", off);
+                    break;
+                }
             }
         }
+    }
 
-        if (pad->layout_detected) {
-            int xo = pad->x_byte_offset;
-            int bo = pad->btn_byte_offset;
-            x_raw = (u16)(buf[xo] | (buf[xo + 1] << 8));
-            hid_buttons = (u32)(buf[bo] | (buf[bo + 1] << 8) | (buf[bo + 2] << 16) | (buf[bo + 3] << 24));
-        } else {
-            /* Fallback if controller booted while turntable was actively held away from center */
-            if (buf[0] != 0 && buf[0] < 8) {
-                x_raw = (u16)(buf[1] | (buf[2] << 8));
-                hid_buttons = (u32)(buf[13] | (buf[14] << 8) | (buf[15] << 16) | (buf[16] << 24));
-            } else {
-                x_raw = (u16)(buf[0] | (buf[1] << 8));
-                hid_buttons = (u32)(buf[12] | (buf[13] << 8) | (buf[14] << 16) | (buf[15] << 24));
-            }
+    /* Read turntable axis */
+    if (pad->turntable_is_16bit) {
+        if (pad->x_byte_offset + 1 < len) {
+            x_raw = (u16)(buf[pad->x_byte_offset] | (buf[pad->x_byte_offset + 1] << 8));
+        }
+    } else {
+        if (pad->x_byte_offset < len) {
+            x_raw = (u16)buf[pad->x_byte_offset] * 257;
         }
     }
 
     pad->last_x = x_raw;
     iidx_process_turntable(pad, x_raw, &up, &down);
+
+    /* Also check D-pad hat switch if controller has one */
+    if (pad->has_hat && pad->hat_byte_offset < len) {
+        u8 hat = buf[pad->hat_byte_offset] & 0x0F;
+        if (hat == 0 || hat == 1 || hat == 7) up = 1;
+        if (hat == 3 || hat == 4 || hat == 5) down = 1;
+    }
+
+    /* Also check dedicated Scratch UP/DOWN buttons (buttons 11 & 12 / bits 10 & 11) */
+    if (hid_buttons & (1 << 10)) up = 1;
+    if (hid_buttons & (1 << 11)) down = 1;
 
     /* Rate-limited debug: only log on state transitions */
     if (hid_buttons != pad->last_raw_buttons || up != pad->last_debug_up || down != pad->last_debug_down) {
@@ -513,7 +606,7 @@ static void usb_data_cb(int resultCode, int bytes, void *arg)
 
     if (resultCode == USB_RC_OK) {
         if (bytes > 0) {
-            iidx_readReport(iidx_pad[pad].usb_buf, &iidx_pad[pad]);
+            iidx_readReport(iidx_pad[pad].usb_buf, bytes, &iidx_pad[pad]);
         }
     } else {
         DPRINTF("usb_data_cb result: %d\n", resultCode);
@@ -613,8 +706,11 @@ int iidxhid_init(u8 pad_enable, u8 pad_options)
         iidx_pad[pad].config.pid_filter = 0;
 
         iidx_pad[pad].layout_detected = 0;
-        iidx_pad[pad].x_byte_offset = 0;
-        iidx_pad[pad].btn_byte_offset = 12;
+        iidx_pad[pad].x_byte_offset = 2;
+        iidx_pad[pad].btn_byte_offset = 0;
+        iidx_pad[pad].hat_byte_offset = 4;
+        iidx_pad[pad].turntable_is_16bit = 1;
+        iidx_pad[pad].has_hat = 0;
         iidx_pad[pad].packet_size = 64;
         iidx_pad[pad].transfer_active = 0;
         iidx_pad[pad].tt_up = 0;
