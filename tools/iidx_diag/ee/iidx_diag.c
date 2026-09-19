@@ -64,11 +64,16 @@ static void save_log(iidx_diag_data_t *diag, const char *path)
 
         len = snprintf(buf, sizeof(buf),
             "=== IIDX DIAGNOSTIC LOG ===\n"
+            "OHCI Port 1: 0x%08X  Port 2: 0x%08X\n"
+            "OHCI Ctrl: 0x%08X  Intr: 0x%08X  Cmd: 0x%08X  RH: 0x%08X\n"
             "VID: 0x%04X  PID: 0x%04X  BCD: 0x%04X\n"
             "Class: 0x%02X  SubClass: 0x%02X  Proto: 0x%02X\n"
             "Active EP: 0x%02X  MaxPkt: %d\n"
             "Total Packets: %u  Changes: %u  Last RC: %d (%s)\n\n"
             "Current Packet (%d bytes):\n",
+            (unsigned int)diag->ohci_port_status[0], (unsigned int)diag->ohci_port_status[1],
+            (unsigned int)diag->ohci_control, (unsigned int)diag->ohci_int_status,
+            (unsigned int)diag->ohci_cmd_status, (unsigned int)diag->ohci_rh_status,
             diag->idVendor, diag->idProduct, diag->bcdDevice,
             diag->bDeviceClass, diag->bDeviceSubClass, diag->bDeviceProtocol,
             diag->active_ep_addr, diag->active_ep_size,
@@ -108,9 +113,13 @@ int main(int argc, char *argv[])
 
     /* Initialize Screen */
     init_scr();
-    scr_printf("Initializing IIDX Diagnostic Tool...\n");
+
+    scr_printf("================================================================\n");
+    scr_printf("       PS2 USB IIDX CONTROLLER HARDWARE DIAGNOSTIC v1.1\n");
+    scr_printf("================================================================\n\n");
 
     /* Reset IOP */
+    scr_printf("Resetting IOP...\n");
     SifInitRpc(0);
     while (!SifIopReset("", 0)) ;
     while (!SifIopSync()) ;
@@ -198,6 +207,16 @@ int main(int argc, char *argv[])
             SifCallRpc(&diag_client, IIDX_DIAG_CMD_RESET, 0, NULL, 0, NULL, 0, NULL, NULL);
             snprintf(status_msg, sizeof(status_msg), "Device reset requested");
         }
+        if (new_pad & PAD_SQUARE) {
+            int p = 0;
+            SifCallRpc(&diag_client, IIDX_DIAG_CMD_FORCE_RESET_PORT, 0, &p, sizeof(int), NULL, 0, NULL, NULL);
+            snprintf(status_msg, sizeof(status_msg), "Force reset Port 1 requested");
+        }
+        if (new_pad & PAD_CIRCLE) {
+            int p = 1;
+            SifCallRpc(&diag_client, IIDX_DIAG_CMD_FORCE_RESET_PORT, 0, &p, sizeof(int), NULL, 0, NULL, NULL);
+            snprintf(status_msg, sizeof(status_msg), "Force reset Port 2 requested");
+        }
 
         /* Calculate packet rate once per second */
         frame_count++;
@@ -211,14 +230,38 @@ int main(int argc, char *argv[])
         scr_setXY(0, 0);
 
         scr_printf("================================================================\n");
-        scr_printf("           PS2 USB CONTROLLER RAW INPUT DIAGNOSTIC v1.0\n");
+        scr_printf("       PS2 USB IIDX CONTROLLER HARDWARE DIAGNOSTIC v1.1\n");
         scr_printf("================================================================\n");
+
+        /* Hardware Root Hub Status (Always visible) */
+        {
+            int p;
+            for (p = 0; p < 2; p++) {
+                u32 st = diag.ohci_port_status[p];
+                scr_printf("Port %d: 0x%08X [Conn:%-3s En:%-3s Reset:%-3s OC:%-4s Spd:%-4s]\n",
+                           p + 1, (unsigned int)st,
+                           (st & 1) ? "YES" : "NO",
+                           (st & 2) ? "YES" : "NO",
+                           (st & 0x10) ? "YES" : "NO",
+                           (st & 8) ? "FAIL" : "OK",
+                           (st & 0x200) ? "LOW" : "FULL");
+            }
+            scr_printf("HC Ctrl:0x%08X Intr:0x%08X Cmd:0x%08X RH:0x%08X\n",
+                       (unsigned int)diag.ohci_control,
+                       (unsigned int)diag.ohci_int_status,
+                       (unsigned int)diag.ohci_cmd_status,
+                       (unsigned int)diag.ohci_rh_status);
+        }
+        scr_printf("----------------------------------------------------------------\n");
 
         if (!diag.connected) {
             int i;
-            scr_printf("STATUS: [NO DEVICE CONNECTED]\n\n");
-            scr_printf("  Please connect your IIDX USB Controller to either USB port.\n");
-            scr_printf("  If already plugged in, try unplugging and replugging.\n\n");
+            scr_printf("STATUS: [NO DEVICE CONNECTED]\n");
+            scr_printf(" * If Conn=NO: check USB cable or hold mode key on plug-in:\n");
+            scr_printf("   - Hold SELECT while plugging in -> Mode 2 (Digital TT)\n");
+            scr_printf("   - Hold VEFX while plugging in   -> Mode 3 (Analog TT)\n");
+            scr_printf("   - Hold START while plugging in  -> Mode 1 (Keyboard/Mouse)\n");
+            scr_printf(" * Controls: [[]] Reset Port 1 | (O) Reset Port 2 | /\\ Reset EP\n");
             scr_printf("--- IOP USB EVENT LOG (%d events) ---\n", (int)diag.change_count);
             for (i = 0; i < DIAG_LOG_ENTRIES; i++) {
                 int idx = (diag.log_head - 1 - i + DIAG_LOG_ENTRIES) % DIAG_LOG_ENTRIES;
@@ -227,7 +270,7 @@ int main(int argc, char *argv[])
                 else
                     scr_printf("                                                                \n");
             }
-            for (i = 0; i < 6; i++) {
+            for (i = 0; i < 2; i++) {
                 scr_printf("                                                                \n");
             }
         } else {

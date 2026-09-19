@@ -342,11 +342,45 @@ static int diag_disconnect(int devId)
     return 0;
 }
 
+static u32 last_port_status[2] = {0xFFFFFFFF, 0xFFFFFFFF};
+
+static void diag_check_ohci(void)
+{
+    volatile u32 *ohci_base = (volatile u32 *)0xBF801600;
+    diag_info.ohci_control    = ohci_base[1];  /* 0xBF801604: HcControl */
+    diag_info.ohci_cmd_status = ohci_base[2];  /* 0xBF801608: HcCommandStatus */
+    diag_info.ohci_int_status = ohci_base[3];  /* 0xBF80160C: HcInterruptStatus */
+    diag_info.ohci_rh_status  = ohci_base[20]; /* 0xBF801650: HcRhStatus */
+    diag_info.ohci_port_status[0] = ohci_base[21]; /* 0xBF801654: HcRhPortStatus[0] (Port 1) */
+    diag_info.ohci_port_status[1] = ohci_base[22]; /* 0xBF801658: HcRhPortStatus[1] (Port 2) */
+
+    for (int p = 0; p < 2; p++) {
+        u32 cur = diag_info.ohci_port_status[p];
+        if (cur != last_port_status[p]) {
+            char msg[48];
+            if (last_port_status[p] == 0xFFFFFFFF) {
+                sprintf(msg, "P%d init: %08X [C=%d E=%d]",
+                        p + 1, (unsigned int)cur, (int)(cur & 1), (int)((cur >> 1) & 1));
+            } else {
+                sprintf(msg, "P%d chg: %08X [C=%d E=%d R=%d OC=%d]",
+                        p + 1, (unsigned int)cur,
+                        (int)(cur & 1),
+                        (int)((cur >> 1) & 1),
+                        (int)((cur >> 4) & 1),
+                        (int)((cur >> 3) & 1));
+            }
+            add_log_entry(msg);
+            last_port_status[p] = cur;
+        }
+    }
+}
+
 static void *rpc_sf(int cmd, void *data, int size)
 {
     switch (cmd) {
         case IIDX_DIAG_CMD_GET_DATA:
             PollSema(diag_sema);
+            diag_check_ohci();
             memcpy(data, &diag_info, sizeof(iidx_diag_data_t));
             SignalSema(diag_sema);
             break;
@@ -388,6 +422,20 @@ static void *rpc_sf(int cmd, void *data, int size)
             }
             SignalSema(diag_sema);
             break;
+
+        case IIDX_DIAG_CMD_FORCE_RESET_PORT: {
+            int port_idx = *(int *)data;
+            PollSema(diag_sema);
+            if (port_idx == 0 || port_idx == 1) {
+                volatile u32 *port_reg = (volatile u32 *)(0xBF801654 + port_idx * 4);
+                *port_reg = (1 << 4); /* PORT_RESET */
+                char msg[48];
+                sprintf(msg, "Force reset Port %d sent", port_idx + 1);
+                add_log_entry(msg);
+            }
+            SignalSema(diag_sema);
+            break;
+        }
 
         default:
             break;

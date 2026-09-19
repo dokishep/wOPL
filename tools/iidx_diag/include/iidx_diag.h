@@ -12,10 +12,11 @@
 #define IIDX_DIAG_CMD_GET_DATA  1
 #define IIDX_DIAG_CMD_SELECT_EP 2
 #define IIDX_DIAG_CMD_RESET     3
+#define IIDX_DIAG_CMD_FORCE_RESET_PORT 4
 
 #define DIAG_MAX_ENDPOINTS 8
 #define DIAG_PACKET_MAX    64
-#define DIAG_LOG_ENTRIES   8
+#define DIAG_LOG_ENTRIES   12
 
 typedef struct {
     u8 bEndpointAddress;
@@ -29,6 +30,13 @@ typedef struct {
     int connected;        /* 1 = device connected */
     int configured;       /* 1 = config set and ready */
     int devId;
+
+    /* Hardware OHCI Root Hub Telemetry */
+    u32 ohci_port_status[2];
+    u32 ohci_control;
+    u32 ohci_cmd_status;
+    u32 ohci_int_status;
+    u32 ohci_rh_status;
 
     /* Device Descriptor */
     u16 idVendor;
