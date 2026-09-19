@@ -477,7 +477,6 @@ int _start(int argc, char *argv[])
     }
 
     memset(&diag_info, 0, sizeof(diag_info));
-    init_usbd_diag_hook();
     add_log_entry("Diagnostic driver started");
 
     /* Start RPC thread FIRST so EE can always connect and receive diagnostic data */
