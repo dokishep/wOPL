@@ -216,23 +216,34 @@ void handleRhsc(void)
         u32 status                                = memPool.ohciRegs->HcRhPortStatus[portNum];
         memPool.ohciRegs->HcRhPortStatus[portNum] = C_PORT_FLAGS; // reset all flags
         if (status & BIT(PORT_CONNECTION)) {
-            if ((port->deviceStatus != DEVICE_NOTCONNECTED) && (status & BIT(C_PORT_CONNECTION)))
+            if ((port->deviceStatus != DEVICE_NOTCONNECTED) && (port->deviceStatus != DEVICE_RESETPENDING) && (status & BIT(C_PORT_CONNECTION))) {
+                usbd_diag_log("HCD: P%d C_CONN bnc st=%08x", portNum + 1, status);
                 flushPort(port);
+            }
 
             if (port->deviceStatus == DEVICE_NOTCONNECTED) {
+                usbd_diag_log("HCD: P%d conn, 500ms rst", portNum + 1);
                 port->deviceStatus = DEVICE_CONNECTED;
                 addTimerCallback(&port->timer, (TimerCallback)hubResetDevice, port, 500);
             } else if (port->deviceStatus == DEVICE_RESETPENDING) {
                 if (!(status & BIT(PORT_RESET))) {
+                    usbd_diag_log("HCD: P%d rst ok spd=%d", portNum + 1, (status >> PORT_LOW_SPEED) & 1);
                     port->deviceStatus     = DEVICE_RESETCOMPLETE;
                     port->isLowSpeedDevice = (status >> PORT_LOW_SPEED) & 1;
                     Endpoint *ep           = openDeviceEndpoint(port, NULL, 0);
-                    if (ep)
+                    if (ep) {
+                        usbd_diag_log("HCD: P%d ep0 ok pkt=%d", portNum + 1, ep->hcEd.maxPacketSize & 0x7FF);
                         hubTimedSetFuncAddress(port);
+                    } else {
+                        usbd_diag_log("HCD: P%d ep0 FAIL", portNum + 1);
+                    }
                 }
             }
-        } else
+        } else {
+            if (port->deviceStatus != DEVICE_NOTCONNECTED)
+                usbd_diag_log("HCD: P%d disc st=%08x", portNum + 1, status);
             flushPort(port);
+        }
         port = port->next;
         portNum++;
     }

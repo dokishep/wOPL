@@ -310,8 +310,10 @@ void hubResetDevice(void *devp)
 {
     Device *dev = devp;
     if (memPool.delayResets) {
+        usbd_diag_log("HUB: rst dly P%d", dev->attachedToPortNo);
         dev->deviceStatus = DEVICE_RESETDELAYED;
     } else {
+        usbd_diag_log("HUB: rst P%d", dev->attachedToPortNo);
         memPool.delayResets = 1;
         dev->deviceStatus   = DEVICE_RESETPENDING;
         dev->resetFlag      = 1;
@@ -356,6 +358,7 @@ int checkDelayedResets(Device *dev)
 
 void killDevice(Device *dev, Endpoint *ep)
 {
+    usbd_diag_log("HUB: killDev P%d", dev->attachedToPortNo);
     removeEndpointFromDevice(dev, ep);
     checkDelayedResets(dev);
     hubResetDevice(dev);
@@ -405,6 +408,7 @@ void fetchConfigDescriptors(IoRequest *req)
     Device *dev  = ep->correspDevice;
     u16 readLen;
 
+    usbd_diag_log("HUB: cfg rc=%d cnt=%d", req->resultCode, dev->fetchDescriptorCounter);
     if ((req->resultCode == USB_RC_OK) || (dev->fetchDescriptorCounter == 0)) {
         int fetchDesc;
 
@@ -425,6 +429,7 @@ void fetchConfigDescriptors(IoRequest *req)
             readLen = sizeof(UsbConfigDescriptor);
 
         if ((u8 *)dev->staticDeviceDescEndPtr + readLen > (u8 *)dev->staticDeviceDescPtr + usbConfig.maxStaticDescSize) {
+            usbd_diag_log("HUB: desc too large!");
             dbg_printf("USBD: Device ignored, Device descriptors too large\n");
             return; // buffer is too small, silently ignore the device
         }
@@ -435,8 +440,10 @@ void fetchConfigDescriptors(IoRequest *req)
                               dev->staticDeviceDescEndPtr, fetchConfigDescriptors);
         } else
             connectNewDevice(dev);
-    } else
+    } else {
+        usbd_diag_log("HUB: cfg err %d -> kill", req->resultCode);
         killDevice(dev, ep);
+    }
 }
 
 void requestDeviceDescriptor(IoRequest *req, u16 length);
@@ -447,7 +454,9 @@ void requestDevDescrptCb(IoRequest *req)
     Device *dev               = ep->correspDevice;
     UsbDeviceDescriptor *desc = dev->staticDeviceDescPtr;
 
+    usbd_diag_log("HUB: dev rc=%d len=%d", req->resultCode, req->transferedBytes);
     if (req->resultCode == USB_RC_OK) {
+        usbd_diag_log("HUB: %04X:%04X ep0=%d", desc->idVendor, desc->idProduct, desc->bMaxPacketSize0);
         if (desc->bMaxPacketSize0 >= 8 && desc->bMaxPacketSize0 <= 64) {
             ep->hcEd.maxPacketSize = (ep->hcEd.maxPacketSize & 0xF800) | desc->bMaxPacketSize0;
         }
@@ -459,6 +468,7 @@ void requestDevDescrptCb(IoRequest *req)
             fetchConfigDescriptors(req);
         }
     } else {
+        usbd_diag_log("HUB: dev err %d -> kill", req->resultCode);
         dbg_printf("unable to read device descriptor, err %d\n", req->resultCode);
         killDevice(dev, ep);
     }
@@ -491,13 +501,16 @@ void hubSetFuncAddressCB(IoRequest *req)
     Endpoint *ep = req->correspEndpoint;
     Device *dev  = ep->correspDevice;
 
+    usbd_diag_log("HUB: set FA cb rc=%d", req->resultCode);
     if (req->resultCode == USB_RC_NORESPONSE) {
         dbg_printf("device not responding\n");
         dev->functionDelay <<= 1;
         if (dev->functionDelay <= 0x500)
             addTimerCallback(&dev->timer, (TimerCallback)hubSetFuncAddress, ep, dev->functionDelay);
-        else
+        else {
+            usbd_diag_log("HUB: set FA noresp -> kill");
             killDevice(dev, ep);
+        }
     } else {
         ep->hcEd.hcArea |= dev->functionAddress & 0x7F;
         dev->deviceStatus = DEVICE_READY;
@@ -510,7 +523,7 @@ void hubSetFuncAddress(Endpoint *ep)
 {
     Device *dev = ep->correspDevice;
 
-    // printf("setting FA %02X\n", dev->functionAddress);
+    usbd_diag_log("HUB: set FA %02X", dev->functionAddress);
     doControlTransfer(ep, &dev->ioRequest,
                       USB_DIR_OUT | USB_RECIP_DEVICE, USB_REQ_SET_ADDRESS, dev->functionAddress, 0, 0, NULL, hubSetFuncAddressCB);
 }

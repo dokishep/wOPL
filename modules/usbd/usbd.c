@@ -60,6 +60,42 @@ UsbdConfig usbConfig = {
 };
 #endif
 
+#include <stdarg.h>
+
+#define USBD_DIAG_LOG_MAX 16
+#define USBD_DIAG_LOG_LEN 48
+static char usbd_diag_buf[USBD_DIAG_LOG_MAX][USBD_DIAG_LOG_LEN];
+static int usbd_diag_head = 0;
+static int usbd_diag_tail = 0;
+
+void usbd_diag_log(const char *fmt, ...)
+{
+    char temp[USBD_DIAG_LOG_LEN];
+    va_list args;
+    va_start(args, fmt);
+    vsprintf(temp, fmt, args);
+    va_end(args);
+
+    strncpy(usbd_diag_buf[usbd_diag_head], temp, USBD_DIAG_LOG_LEN - 1);
+    usbd_diag_buf[usbd_diag_head][USBD_DIAG_LOG_LEN - 1] = '\0';
+    usbd_diag_head = (usbd_diag_head + 1) % USBD_DIAG_LOG_MAX;
+    if (usbd_diag_head == usbd_diag_tail) {
+        usbd_diag_tail = (usbd_diag_tail + 1) % USBD_DIAG_LOG_MAX;
+    }
+}
+
+int sceUsbdGetDiagLog(char *dst, int max_len)
+{
+    if (!dst || max_len <= 0)
+        return 0;
+    if (usbd_diag_head == usbd_diag_tail)
+        return 0;
+    strncpy(dst, usbd_diag_buf[usbd_diag_tail], max_len - 1);
+    dst[max_len - 1] = '\0';
+    usbd_diag_tail = (usbd_diag_tail + 1) % USBD_DIAG_LOG_MAX;
+    return 1;
+}
+
 int usbdSema;
 
 int usbdLock(void)

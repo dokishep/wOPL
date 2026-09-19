@@ -168,10 +168,12 @@ int doUnregisterDriver(sceUsbdLddOps *drv)
 void connectNewDevice(Device *dev)
 {
     sceUsbdLddOps *drv;
+    usbd_diag_log("DRV: search dev %d FA %02X", dev->id, dev->functionAddress);
     dbg_printf("searching driver for dev %d, FA %02X\n", dev->id, dev->functionAddress);
     for (drv = drvListStart; drv != NULL; drv = drv->next)
         if (callUsbDriverFunc(drv->probe, dev->id, drv->gp) != 0) {
             dev->devDriver = drv;
+            usbd_diag_log("DRV: matched %s", drv->name);
             dbg_printf("Driver found (%s)\n", drv->name);
             callUsbDriverFunc(drv->connect, dev->id, drv->gp);
             return;
@@ -183,12 +185,14 @@ void connectNewDevice(Device *dev)
 
         if (callUsbDriverFunc(drv->probe, dev->id, drv->gp) != 0) {
             dev->devDriver = drv;
+            usbd_diag_log("DRV: auto %s", drv->name);
             dbg_printf("(autoloader) Driver found (%s)\n", drv->name);
             callUsbDriverFunc(drv->connect, dev->id, drv->gp);
             return;
         }
     }
 
+    usbd_diag_log("DRV: no driver match");
     dbg_printf("no driver found\n");
 }
 

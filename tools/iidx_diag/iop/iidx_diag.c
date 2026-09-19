@@ -342,6 +342,18 @@ static int diag_disconnect(int devId)
     return 0;
 }
 
+typedef int (*sceUsbdGetDiagLog_t)(char *dst, int max_len);
+static sceUsbdGetDiagLog_t p_sceUsbdGetDiagLog = NULL;
+
+static void init_usbd_diag_hook(void)
+{
+    struct irx_export_table *lib = QueryLibraryEntryTable("usbd");
+    if (lib) {
+        /* In modules/usbd/exports.tab, sceUsbdGetDiagLog is entry 17 */
+        p_sceUsbdGetDiagLog = (sceUsbdGetDiagLog_t)lib->fptrs[17];
+    }
+}
+
 static u32 last_port_status[2] = {0xFFFFFFFF, 0xFFFFFFFF};
 
 static void diag_check_ohci(void)
@@ -371,6 +383,16 @@ static void diag_check_ohci(void)
             }
             add_log_entry(msg);
             last_port_status[p] = cur;
+        }
+    }
+
+    if (!p_sceUsbdGetDiagLog)
+        init_usbd_diag_hook();
+
+    if (p_sceUsbdGetDiagLog) {
+        char usbd_msg[48];
+        while (p_sceUsbdGetDiagLog(usbd_msg, sizeof(usbd_msg))) {
+            add_log_entry(usbd_msg);
         }
     }
 }
@@ -470,6 +492,7 @@ int _start(int argc, char *argv[])
     }
 
     memset(&diag_info, 0, sizeof(diag_info));
+    init_usbd_diag_hook();
     add_log_entry("Diagnostic driver started");
 
     /* Start RPC thread FIRST so EE can always connect and receive diagnostic data */

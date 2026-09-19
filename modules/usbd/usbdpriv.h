@@ -29,6 +29,9 @@
 #define dbg_printf(a...) (void)0
 #endif
 
+void usbd_diag_log(const char *fmt, ...);
+int sceUsbdGetDiagLog(char *dst, int max_len);
+
 #define READ_UINT16(a) (((u8 *)a)[0] | (((u8 *)a)[1] << 8))
 
 typedef struct
