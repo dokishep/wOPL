@@ -215,25 +215,21 @@ int main(int argc, char *argv[])
         scr_printf("================================================================\n");
 
         if (!diag.connected) {
+            int i;
             scr_printf("STATUS: [NO DEVICE CONNECTED]\n\n");
-            scr_printf("  Please connect your IIDX USB Controller to Port 1 (Right USB).\n");
+            scr_printf("  Please connect your IIDX USB Controller to either USB port.\n");
             scr_printf("  If already plugged in, try unplugging and replugging.\n\n");
-            scr_printf("  Waiting for USB insertion...\n");
-            scr_printf("                                                                \n");
-            scr_printf("                                                                \n");
-            scr_printf("                                                                \n");
-            scr_printf("                                                                \n");
-            scr_printf("                                                                \n");
-            scr_printf("                                                                \n");
-            scr_printf("                                                                \n");
-            scr_printf("                                                                \n");
-            scr_printf("                                                                \n");
-            scr_printf("                                                                \n");
-            scr_printf("                                                                \n");
-            scr_printf("                                                                \n");
-            scr_printf("                                                                \n");
-            scr_printf("                                                                \n");
-            scr_printf("                                                                \n");
+            scr_printf("--- IOP USB EVENT LOG (%d events) ---\n", (int)diag.change_count);
+            for (i = 0; i < DIAG_LOG_ENTRIES; i++) {
+                int idx = (diag.log_head - 1 - i + DIAG_LOG_ENTRIES) % DIAG_LOG_ENTRIES;
+                if (diag.recent_changes[idx][0] != '\0')
+                    scr_printf(" > %-60s\n", diag.recent_changes[idx]);
+                else
+                    scr_printf("                                                                \n");
+            }
+            for (i = 0; i < 6; i++) {
+                scr_printf("                                                                \n");
+            }
         } else {
             int i;
             scr_printf("STATUS: CONNECTED  |  Configured: %s  |  DevID: %d\n",

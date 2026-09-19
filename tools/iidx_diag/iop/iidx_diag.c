@@ -44,21 +44,21 @@ static void add_log_entry(const char *msg)
 static int diag_probe(int devId)
 {
     UsbDeviceDescriptor *device;
+    char msg[48];
+
+    diag_info.change_count++;
 
     device = (UsbDeviceDescriptor *)sceUsbdScanStaticDescriptor(devId, NULL, USB_DT_DEVICE);
-    if (device == NULL)
-        return 0;
+    if (device == NULL) {
+        sprintf(msg, "P#%d: devId=%d desc=NULL", (int)diag_info.change_count, devId);
+        add_log_entry(msg);
+        return 1;
+    }
 
-    /* Ignore USB Hubs */
-    if (device->bDeviceClass == USB_CLASS_HUB)
-        return 0;
-
-    /* Ignore invalid vendor ID */
-    if (device->idVendor == 0x0000)
-        return 0;
-
-    printf(MODNAME ": probe claimed devId=%d VID=%04X PID=%04X class=%02X\n",
-           devId, device->idVendor, device->idProduct, device->bDeviceClass);
+    sprintf(msg, "P#%d: devId=%d %04X:%04X c=%02X",
+            (int)diag_info.change_count, devId,
+            device->idVendor, device->idProduct, device->bDeviceClass);
+    add_log_entry(msg);
 
     return 1;
 }
@@ -69,25 +69,36 @@ static int diag_connect(int devId)
     UsbConfigDescriptor *config;
     const u8 *p, *end;
     int best_ep_idx = -1;
+    char msg[48];
 
     printf(MODNAME ": connect devId=%d\n", devId);
 
     PollSema(diag_sema);
 
-    memset(&diag_info, 0, sizeof(diag_info));
     diag_info.devId = devId;
-    diag_info.connected = 1;
+    diag_info.connected = 0;
+    diag_info.configured = 0;
+    diag_info.num_endpoints = 0;
+    diag_info.active_ep_idx = -1;
+    diag_info.total_packets = 0;
+    diag_info.last_result = 0;
+    diag_info.last_bytes = 0;
+    memset(diag_info.current_packet, 0, sizeof(diag_info.current_packet));
+    memset(diag_info.prev_packet, 0, sizeof(diag_info.prev_packet));
+    memset(diag_info.diff_mask, 0, sizeof(diag_info.diff_mask));
     controlEndp = -1;
     interruptEndp = -1;
     transfer_active = 0;
 
     device = (UsbDeviceDescriptor *)sceUsbdScanStaticDescriptor(devId, NULL, USB_DT_DEVICE);
     if (device == NULL) {
-        printf(MODNAME ": failed to get device descriptor\n");
+        sprintf(msg, "C: devId=%d desc=NULL!", devId);
+        add_log_entry(msg);
         SignalSema(diag_sema);
         return 1;
     }
 
+    diag_info.connected = 1;
     diag_info.idVendor = device->idVendor;
     diag_info.idProduct = device->idProduct;
     diag_info.bcdDevice = device->bcdDevice;
@@ -96,6 +107,11 @@ static int diag_connect(int devId)
     diag_info.bDeviceProtocol = device->bDeviceProtocol;
     diag_info.bMaxPacketSize0 = device->bMaxPacketSize0;
     diag_info.bNumConfigurations = device->bNumConfigurations;
+
+    sprintf(msg, "C: %04X:%04X c=%02X cfg=%d",
+            device->idVendor, device->idProduct,
+            device->bDeviceClass, device->bNumConfigurations);
+    add_log_entry(msg);
 
     controlEndp = sceUsbdOpenPipe(devId, NULL);
 
