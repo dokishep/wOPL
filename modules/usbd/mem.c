@@ -90,6 +90,7 @@ Device *attachChildDevice(Device *parent, u32 portNum)
     newDev->devDriver                                   = NULL;
     newDev->deviceStatus                                = DEVICE_NOTCONNECTED;
     newDev->resetFlag                                   = 0;
+    newDev->resetRetries                                = 0;
     newDev->childListEnd = newDev->childListStart = NULL;
     newDev->parent                                = parent;
     newDev->attachedToPortNo                      = portNum;

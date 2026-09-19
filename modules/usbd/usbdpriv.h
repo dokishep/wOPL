@@ -101,6 +101,7 @@ typedef struct _device
     u8 functionAddress;
     u8 isLowSpeedDevice;
     u8 resetFlag;
+    u8 resetRetries;
     struct _device *childListStart, *childListEnd;
     struct _device *parent;
     u32 attachedToPortNo;

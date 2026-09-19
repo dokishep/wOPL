@@ -165,13 +165,24 @@ int main(int argc, char *argv[])
     scr_printf("Ready! Starting diagnostic dashboard...\n");
     sleep(1);
 
-    while (1) {
-        iidx_diag_data_t diag;
+    int log_frozen = 0;
+    int auto_saved = 0;
 
-        /* Fetch data from IOP */
-        memset(rpc_buf, 0, sizeof(rpc_buf));
-        SifCallRpc(&diag_client, IIDX_DIAG_CMD_GET_DATA, 0, NULL, 0, rpc_buf, sizeof(iidx_diag_data_t), NULL, NULL);
-        memcpy(&diag, rpc_buf, sizeof(iidx_diag_data_t));
+    while (1) {
+        static iidx_diag_data_t diag;
+
+        /* Fetch data from IOP (skip if log is frozen) */
+        if (!log_frozen) {
+            memset(rpc_buf, 0, sizeof(rpc_buf));
+            SifCallRpc(&diag_client, IIDX_DIAG_CMD_GET_DATA, 0, NULL, 0, rpc_buf, sizeof(iidx_diag_data_t), NULL, NULL);
+            memcpy(&diag, rpc_buf, sizeof(iidx_diag_data_t));
+
+            /* Auto-save to mc0 if events occurred and not yet saved */
+            if (!auto_saved && diag.change_count >= 3) {
+                save_log(&diag, "mc0:/iidx_diag.txt");
+                auto_saved = 1;
+            }
+        }
 
         /* Read DualShock input for interactive controls */
         paddata = 0;
@@ -188,6 +199,10 @@ int main(int argc, char *argv[])
         old_pad = paddata;
 
         /* Check button presses */
+        if (new_pad & PAD_CROSS) {
+            log_frozen = !log_frozen;
+            snprintf(status_msg, sizeof(status_msg), log_frozen ? "LOG PAUSED - Press [X] to resume" : "LOG RESUMED");
+        }
         if (new_pad & PAD_START) {
             save_log(&diag, "mc0:/iidx_diag.txt");
             save_log(&diag, "mass:/iidx_diag.txt");
@@ -305,8 +320,7 @@ int main(int argc, char *argv[])
         }
 
         scr_printf("----------------------------------------------------------------\n");
-        scr_printf("%-64s\n", status_msg);
-        scr_printf("[START] Save mc0:/mass: | [[]]/(O) Reset P1/P2 | [/\\ ] Reset\n");
+        scr_printf("[START] Save | [X] Pause | [[]]/(O) Reset P1/P2 | [/\\ ] Reset\n");
         scr_printf("================================================================\n");
 
         /* ~60 FPS delay */

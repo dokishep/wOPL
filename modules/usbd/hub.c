@@ -358,10 +358,16 @@ int checkDelayedResets(Device *dev)
 
 void killDevice(Device *dev, Endpoint *ep)
 {
-    usbd_diag_log("HUB: killDev P%d", dev->attachedToPortNo);
+    usbd_diag_log("HUB: killDev P%d #%d", dev->attachedToPortNo, dev->resetRetries + 1);
     removeEndpointFromDevice(dev, ep);
     checkDelayedResets(dev);
-    hubResetDevice(dev);
+
+    dev->resetRetries++;
+    if (dev->resetRetries < 2) {
+        hubResetDevice(dev);
+    } else {
+        usbd_diag_log("HUB: P%d STOP (failed)", dev->attachedToPortNo);
+    }
 }
 
 void flushPort(Device *dev)
@@ -369,6 +375,7 @@ void flushPort(Device *dev)
     Device *child;
     if (dev->deviceStatus != DEVICE_NOTCONNECTED) {
         dev->deviceStatus = DEVICE_NOTCONNECTED;
+        dev->resetRetries = 0;
         if (dev->devDriver) {
             callUsbDriverFunc(dev->devDriver->disconnect, dev->id, dev->devDriver->gp);
             dev->devDriver = NULL;

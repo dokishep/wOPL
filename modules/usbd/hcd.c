@@ -219,6 +219,7 @@ void handleRhsc(void)
             if (port->deviceStatus == DEVICE_NOTCONNECTED) {
                 usbd_diag_log("HCD: P%d conn, 500ms rst", portNum + 1);
                 port->deviceStatus = DEVICE_CONNECTED;
+                port->resetRetries = 0;
                 addTimerCallback(&port->timer, (TimerCallback)hubResetDevice, port, 500);
             } else if (port->deviceStatus == DEVICE_RESETPENDING) {
                 if (!(status & BIT(PORT_RESET))) {
