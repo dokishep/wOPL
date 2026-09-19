@@ -139,7 +139,11 @@ Endpoint *openDeviceEndpoint(Device *dev, UsbEndpointDescriptor *endpDesc, u32 a
         newEp->hcEd.hcArea        = flags;
         newEp->hcEd.maxPacketSize = hcMaxPktSize;
     } else {
-        newEp->hcEd.maxPacketSize = 8;
+        if (dev->isLowSpeedDevice)
+            newEp->hcEd.maxPacketSize = 8;
+        else
+            newEp->hcEd.maxPacketSize = 64;
+
         if (dev->isLowSpeedDevice)
             newEp->hcEd.hcArea = HCED_SPEED;
         else

@@ -172,9 +172,11 @@ int main(int argc, char *argv[])
 
         /* Fetch data from IOP (skip if log is frozen) */
         if (!log_frozen) {
-            memset(rpc_buf, 0, sizeof(rpc_buf));
-            SifCallRpc(&diag_client, IIDX_DIAG_CMD_GET_DATA, 0, NULL, 0, rpc_buf, sizeof(iidx_diag_data_t), NULL, NULL);
-            memcpy(&diag, rpc_buf, sizeof(iidx_diag_data_t));
+            void *uncached_rpc_buf = (void *)((u32)rpc_buf | 0x20000000);
+            memset(uncached_rpc_buf, 0, sizeof(iidx_diag_data_t));
+            SyncDCache((void *)rpc_buf, (void *)(rpc_buf + sizeof(rpc_buf)));
+            SifCallRpc(&diag_client, IIDX_DIAG_CMD_GET_DATA, 0, NULL, 0, uncached_rpc_buf, sizeof(iidx_diag_data_t), NULL, NULL);
+            memcpy(&diag, uncached_rpc_buf, sizeof(iidx_diag_data_t));
         }
 
         /* Read DualShock input for interactive controls */

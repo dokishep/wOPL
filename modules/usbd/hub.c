@@ -433,7 +433,7 @@ void fetchConfigDescriptors(IoRequest *req)
             UsbConfigDescriptor *desc = dev->staticDeviceDescEndPtr;
             readLen                   = READ_UINT16(&desc->wTotalLength);
         } else
-            readLen = 4;
+            readLen = sizeof(UsbConfigDescriptor);
 
         if ((u8 *)dev->staticDeviceDescEndPtr + readLen > (u8 *)dev->staticDeviceDescPtr + usbConfig.maxStaticDescSize) {
             usbd_diag_log("HUB: desc too large!");
