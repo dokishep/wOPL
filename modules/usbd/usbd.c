@@ -22,6 +22,7 @@
 #include "stdio.h"
 #include "sysclib.h"
 #include "thsemap.h"
+#include "intrman.h"
 #include "loadcore.h"
 IRX_ID(MODNAME, 1, 1);
 
@@ -72,27 +73,38 @@ void usbd_diag_log(const char *fmt, ...)
 {
     char temp[USBD_DIAG_LOG_LEN];
     va_list args;
+    int oldIntr;
+
     va_start(args, fmt);
     vsprintf(temp, fmt, args);
     va_end(args);
+    temp[USBD_DIAG_LOG_LEN - 1] = '\0';
 
+    CpuSuspendIntr(&oldIntr);
     strncpy(usbd_diag_buf[usbd_diag_head], temp, USBD_DIAG_LOG_LEN - 1);
     usbd_diag_buf[usbd_diag_head][USBD_DIAG_LOG_LEN - 1] = '\0';
     usbd_diag_head = (usbd_diag_head + 1) % USBD_DIAG_LOG_MAX;
     if (usbd_diag_head == usbd_diag_tail) {
         usbd_diag_tail = (usbd_diag_tail + 1) % USBD_DIAG_LOG_MAX;
     }
+    CpuResumeIntr(oldIntr);
 }
 
 int sceUsbdGetDiagLog(char *dst, int max_len)
 {
+    int oldIntr;
     if (!dst || max_len <= 0)
         return 0;
-    if (usbd_diag_head == usbd_diag_tail)
+
+    CpuSuspendIntr(&oldIntr);
+    if (usbd_diag_head == usbd_diag_tail) {
+        CpuResumeIntr(oldIntr);
         return 0;
+    }
     strncpy(dst, usbd_diag_buf[usbd_diag_tail], max_len - 1);
     dst[max_len - 1] = '\0';
     usbd_diag_tail = (usbd_diag_tail + 1) % USBD_DIAG_LOG_MAX;
+    CpuResumeIntr(oldIntr);
     return 1;
 }
 

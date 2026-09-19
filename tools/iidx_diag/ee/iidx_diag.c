@@ -266,6 +266,7 @@ int main(int argc, char *argv[])
             scr_printf("--- IOP USB EVENT LOG (%d events) ---\n", (int)diag.change_count);
             for (i = 0; i < 8; i++) {
                 int idx = (diag.log_head - 1 - i + DIAG_LOG_ENTRIES) % DIAG_LOG_ENTRIES;
+                diag.recent_changes[idx][47] = '\0';
                 if (diag.recent_changes[idx][0] != '\0')
                     scr_printf(" > %-60s\n", diag.recent_changes[idx]);
                 else

@@ -289,8 +289,8 @@ void hcdProcessIntr(void)
 
     if (intrFlags & OHCI_INT_RHSC) {
         dbg_printf("RHSC\n");
-        memPool.ohciRegs->HcInterruptStatus = OHCI_INT_RHSC;
         handleRhsc();
+        memPool.ohciRegs->HcInterruptStatus = OHCI_INT_RHSC;
         intrFlags &= ~OHCI_INT_RHSC;
     }
 

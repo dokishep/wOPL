@@ -37,6 +37,7 @@ static UsbEndpointDescriptor saved_endpoints[DIAG_MAX_ENDPOINTS];
 
 static void add_log_entry(const char *msg)
 {
+    diag_info.change_count++;
     strncpy(diag_info.recent_changes[diag_info.log_head], msg, 47);
     diag_info.recent_changes[diag_info.log_head][47] = '\0';
     diag_info.log_head = (diag_info.log_head + 1) % DIAG_LOG_ENTRIES;
